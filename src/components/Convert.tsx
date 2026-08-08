@@ -267,6 +267,21 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
     }
   };
 
+  const downloadPixelResult = useCallback(async () => {
+    if (!result) return;
+    const file = await pixelsToPngFile(result.pixels, result.w, result.h, `pixelpaint-${result.w}x${result.h}.png`);
+    if (!file) {
+      setError(t("createPngError"));
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file.name;
+    a.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }, [result, t]);
+
   return (
     <div className="convert-workbench">
       <div className="workbench-head">
@@ -473,6 +488,14 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
                 </button>
                 <button type="button" className="btn-ghost" disabled={!result || busy || sending} onClick={() => void enterBackground()}>
                   {sending ? t("prepare") : t("background")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost operation-secondary-action background-result-button"
+                  disabled={!result || busy || sending}
+                  onClick={() => void downloadPixelResult()}
+                >
+                  {t("downloadPng")}
                 </button>
               </div>
             </div>
