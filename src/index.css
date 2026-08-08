@@ -24,7 +24,32 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-html, body, #root { min-height: 100vh; }
+html, body, #root { min-height: 100vh; min-height: 100dvh; }
+
+.app-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 屏幕阅读器专用（视觉隐藏但可被读出） */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.link-btn {
+  font: inherit; font-size: inherit; color: var(--primary);
+  background: none; border: none; padding: 0; cursor: pointer;
+  text-decoration: underline;
+}
+.link-btn:hover { color: var(--primary-dark); }
 
 body {
   font-family: var(--sans);
@@ -160,7 +185,35 @@ button { font-family: inherit; }
   margin-top: 24px;
   align-items: start;
 }
-@media (max-width: 920px) { .editor-layout { grid-template-columns: 1fr; } }
+@media (max-width: 920px) {
+  .editor-layout { grid-template-columns: 1fr; }
+  /* 窄屏：工具改为横向排列，不再把画布顶到首屏之外 */
+  .tool-panel {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    position: sticky;
+    top: 64px;
+    z-index: 20;
+  }
+  .tool-list { flex-direction: row; flex-wrap: wrap; }
+  .tool-btn { min-width: 48px; }
+  .tool-divider { display: none; }
+  .tool-panel-field { flex: 1; min-width: 104px; margin-top: 0; }
+  .canvas-stage { max-height: 56dvh; padding: 12px; }
+  .side-panels { gap: 12px; }
+}
+
+@media (max-width: 560px) {
+  .header-inner { padding: 12px 0; }
+  .brand h1 { font-size: 19px; }
+  .tagline, .privacy-note { font-size: 12px; }
+  .privacy-note { display: none; }
+  .tool-btn { min-width: 44px; font-size: 10.5px; }
+  .card { padding: 14px; margin-top: 14px; }
+  .shortcut-hint { display: none; }
+}
 
 .tool-panel { padding: 12px; display: flex; flex-direction: column; gap: 6px; }
 .tool-list { display: flex; flex-direction: column; gap: 2px; }
@@ -181,14 +234,41 @@ button { font-family: inherit; }
 }
 .canvas-stage {
   display: flex; justify-content: center; align-items: flex-start;
-  padding: 20px; border-radius: 10px; min-height: 360px; max-height: 70vh; overflow: auto;
+  padding: 20px; border-radius: 10px; min-height: 320px; max-height: 68dvh; overflow: auto;
 }
 .canvas-wrap { position: relative; box-shadow: 0 0 0 1px var(--border); flex-shrink: 0; }
+/* 预览叠加层：显示“将要落下的确切像素”，与最终结果一致 */
+.canvas-overlay {
+  position: absolute;
+  left: 0; top: 0;
+  pointer-events: none;
+}
+
 .canvas-grid {
   position: absolute; inset: 0; pointer-events: none;
   background-image:
     linear-gradient(rgba(31, 36, 48, 0.14) 1px, transparent 1px),
     linear-gradient(90deg, rgba(31, 36, 48, 0.14) 1px, transparent 1px);
+}
+
+.shortcut-hint {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 10px;
+  line-height: 1.7;
+}
+
+/* 图标按钮：保证 SVG 居中 */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.icon-text-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
 }
 
 .side-panels { display: flex; flex-direction: column; gap: 16px; min-width: 0; }

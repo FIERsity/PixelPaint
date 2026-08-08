@@ -7,6 +7,7 @@ import type { ToPixelRequest, ToPixelResponse } from "../lib/toPixel.worker";
 
 interface ConvertProps {
   onImport: (doc: PixelDoc) => void;
+  onNotice?: (msg: string) => void;
 }
 
 interface Source {
@@ -22,7 +23,7 @@ interface Result {
   h: number;
 }
 
-export default function Convert({ onImport }: ConvertProps) {
+export default function Convert({ onImport, onNotice }: ConvertProps) {
   const [source, setSource] = useState<Source | null>(null);
   const [outW, setOutW] = useState(32);
   const [outH, setOutH] = useState(32);
@@ -39,6 +40,8 @@ export default function Convert({ onImport }: ConvertProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
   const reqId = useRef(0);
+  // 每个请求自带尺寸，避免用“最新参数”错配旧结果导致崩溃/花屏
+  const pending = useRef(new Map<number, { w: number; h: number }>());
   const sourceRef = useRef<Source | null>(null);
   sourceRef.current = source;
   const optsRef = useRef<ToPixelOptions | null>(null);
@@ -63,18 +66,27 @@ export default function Convert({ onImport }: ConvertProps) {
     const w = new Worker(new URL("../lib/toPixel.worker.ts", import.meta.url), { type: "module" });
     w.onmessage = (e: MessageEvent<ToPixelResponse>) => {
       const msg = e.data as ToPixelResponse & { error?: string };
+      const req = pending.current.get(msg.id);
+      pending.current.delete(msg.id);
+      // 只采纳最新一次请求的结果
+      if (msg.id !== reqId.current) return;
       if (msg.error) {
         setError(msg.error);
         setBusy(false);
         return;
       }
-      const opts = optsRef.current;
-      if (!opts) return;
-      setResult({ pixels: msg.pixels, w: opts.outWidth, h: opts.outHeight });
+      if (!req) return;
+      setResult({ pixels: msg.pixels, w: req.w, h: req.h });
       setBusy(false);
     };
     workerRef.current = w;
     return w;
+  }, []);
+
+  // 卸载时终止 worker，避免僵尸线程持有整张源图
+  useEffect(() => () => {
+    workerRef.current?.terminate();
+    workerRef.current = null;
   }, []);
 
   const runConvert = useCallback(() => {
@@ -85,6 +97,7 @@ export default function Convert({ onImport }: ConvertProps) {
     if (!opts) return;
     reqId.current += 1;
     const id = reqId.current;
+    pending.current.set(id, { w: opts.outWidth, h: opts.outHeight });
     setBusy(true);
     setError(null);
     // 传拷贝而非 transfer，避免 detach 源图
@@ -129,10 +142,11 @@ export default function Convert({ onImport }: ConvertProps) {
       const h = Math.max(1, Math.round((32 * img.height) / img.width));
       setOutW(w);
       setOutH(h);
+      onNotice?.(`已读取 ${file.name}（${img.width}×${img.height}）`);
     } catch {
       setError("无法读取该图片，请换一张试试。");
     }
-  }, []);
+  }, [onNotice]);
 
   const onWidth = (v: number) => {
     const w = Math.max(1, Math.min(512, Math.round(v) || 1));
@@ -150,6 +164,7 @@ export default function Convert({ onImport }: ConvertProps) {
   };
 
   const chosenPalette: Palette = PRESET_PALETTES.find((p) => p.name === paletteName) ?? NO_PALETTE;
+  const paletteLocked = chosenPalette.colors.length > 0;
   // 预览放大：小画布放大到可读尺寸（最长边约 420px），不超过 20×
   const previewScale = result
     ? Math.max(1, Math.min(20, Math.floor(420 / Math.max(result.w, result.h))))
@@ -165,8 +180,15 @@ export default function Convert({ onImport }: ConvertProps) {
           onDragOver={(e) => { e.preventDefault(); setDragover(true); }}
           onDragLeave={() => setDragover(false)}
           onDrop={handleDrop}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              inputRef.current?.click();
+            }
+          }}
           role="button"
           tabIndex={0}
+          aria-label="选择或拖放要转像素的图片"
         >
           <input
             ref={inputRef}
@@ -222,11 +244,11 @@ export default function Convert({ onImport }: ConvertProps) {
           <div className="tool-divider" />
 
           <div className="param-row">
-            <label>输出尺寸 <span className="range-val">{outW}×{outH}</span></label>
+            <label htmlFor="out-w">输出尺寸 <span className="range-val">{outW}×{outH}</span></label>
             <div className="size-row">
-              <input className="num-input" type="number" min={1} max={512} value={outW} onChange={(e) => onWidth(Number(e.target.value))} />
-              <span style={{ color: "var(--muted)" }}>×</span>
-              <input className="num-input" type="number" min={1} max={512} value={outH} onChange={(e) => setOutH(Math.max(1, Math.min(512, Number(e.target.value) || 1)))} />
+              <input id="out-w" className="num-input" type="number" min={1} max={512} value={outW} onChange={(e) => onWidth(Number(e.target.value))} aria-label="输出宽度" />
+              <span style={{ color: "var(--muted)" }} aria-hidden="true">×</span>
+              <input className="num-input" type="number" min={1} max={512} value={outH} onChange={(e) => setOutH(Math.max(1, Math.min(512, Number(e.target.value) || 1)))} aria-label="输出高度" />
             </div>
             <label className="ghost-check" style={{ marginTop: 6 }}>
               <input type="checkbox" checked={lockRatio} onChange={(e) => setLockRatio(e.target.checked)} />
@@ -235,13 +257,26 @@ export default function Convert({ onImport }: ConvertProps) {
           </div>
 
           <div className="param-row">
-            <label>颜色数 <span className="range-val">{maxColors}</span></label>
-            <input type="range" min={2} max={64} value={maxColors} onChange={(e) => setMaxColors(Number(e.target.value))} />
+            <label htmlFor="max-colors">
+              颜色数 <span className="range-val">{paletteLocked ? "由调色板决定" : maxColors}</span>
+            </label>
+            <input
+              id="max-colors"
+              type="range" min={2} max={64} value={maxColors}
+              onChange={(e) => setMaxColors(Number(e.target.value))}
+              disabled={paletteLocked}
+            />
+            {paletteLocked && (
+              <p style={{ fontSize: 12, color: "var(--muted)" }}>
+                已选固定调色板（{chosenPalette.colors.length} 色），此项无效
+              </p>
+            )}
           </div>
 
           <div className="param-row">
-            <label>调色板</label>
+            <label htmlFor="palette-pick">调色板</label>
             <select
+              id="palette-pick"
               className="num-input" style={{ width: "100%" }}
               value={paletteName}
               onChange={(e) => setPaletteName(e.target.value)}
@@ -260,8 +295,9 @@ export default function Convert({ onImport }: ConvertProps) {
           </div>
 
           <div className="param-row">
-            <label>抖动</label>
+            <label htmlFor="dither-pick">抖动</label>
             <select
+              id="dither-pick"
               className="num-input" style={{ width: "100%" }}
               value={dither}
               onChange={(e) => setDither(e.target.value as DitherMode)}

@@ -1,14 +1,15 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PixelDoc } from "../lib/pixelDoc";
 import { docFromPixels } from "../lib/pixelDoc";
 
 interface CutoutProps {
   onImport: (doc: PixelDoc) => void;
+  onNotice?: (msg: string) => void;
 }
 
 type Phase = "idle" | "ready" | "running" | "done" | "error";
 
-export default function Cutout({ onImport }: CutoutProps) {
+export default function Cutout({ onImport, onNotice }: CutoutProps) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [srcUrl, setSrcUrl] = useState<string | null>(null);
   const [srcFile, setSrcFile] = useState<File | null>(null);
@@ -20,6 +21,14 @@ export default function Cutout({ onImport }: CutoutProps) {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const runningRef = useRef(false);
+  // 跟踪当前 object URL，保证卸载时能释放（否则 Blob 泄漏到页面关闭）
+  const urlsRef = useRef<{ src: string | null; result: string | null }>({ src: null, result: null });
+  urlsRef.current = { src: srcUrl, result: resultUrl };
+
+  useEffect(() => () => {
+    if (urlsRef.current.src) URL.revokeObjectURL(urlsRef.current.src);
+    if (urlsRef.current.result) URL.revokeObjectURL(urlsRef.current.result);
+  }, []);
 
   const loadFile = useCallback((file: File) => {
     // 清理旧资源
@@ -65,6 +74,7 @@ export default function Cutout({ onImport }: CutoutProps) {
       setResultUrl(URL.createObjectURL(blob));
       setProgress(null);
       setPhase("done");
+      onNotice?.("抠图完成");
     } catch (err) {
       console.error(err);
       setError("抠图失败，可能是模型下载被拦截或图片无法处理。请重试。");
@@ -110,8 +120,15 @@ export default function Cutout({ onImport }: CutoutProps) {
           onDragOver={(e) => { e.preventDefault(); setDragover(true); }}
           onDragLeave={() => setDragover(false)}
           onDrop={handleDrop}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              inputRef.current?.click();
+            }
+          }}
           role="button"
           tabIndex={0}
+          aria-label="选择或拖放要抠图的图片"
         >
           <input
             ref={inputRef}
@@ -164,8 +181,9 @@ export default function Cutout({ onImport }: CutoutProps) {
           <h2 className="card-title">抠图设置</h2>
           <div className="tool-divider" />
           <div className="param-row">
-            <label>模型精度</label>
+            <label htmlFor="cutout-model">模型精度</label>
             <select
+              id="cutout-model"
               className="num-input" style={{ width: "100%" }}
               value={model}
               onChange={(e) => setModel(e.target.value as "isnet" | "isnet_quint8")}

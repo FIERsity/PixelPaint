@@ -19,6 +19,33 @@ export interface PixelDoc {
 export type Tool = "pencil" | "eraser" | "picker" | "fill" | "line" | "rect";
 export type MirrorMode = "none" | "x" | "y" | "both";
 
+// 笔刷覆盖的相对偏移（1 = 单像素，n = n×n）
+export function brushOffsets(size: number): Array<[number, number]> {
+  const n = Math.max(1, Math.round(size));
+  const start = -Math.floor((n - 1) / 2);
+  const out: Array<[number, number]> = [];
+  for (let dy = 0; dy < n; dy++) {
+    for (let dx = 0; dx < n; dx++) out.push([start + dx, start + dy]);
+  }
+  return out;
+}
+
+// 矩形轮廓点
+export function rectPoints(
+  x0: number, y0: number, x1: number, y1: number, filled: boolean,
+): Array<[number, number]> {
+  const ax = Math.min(x0, x1), ay = Math.min(y0, y1);
+  const bx = Math.max(x0, x1), by = Math.max(y0, y1);
+  const pts: Array<[number, number]> = [];
+  if (filled) {
+    for (let y = ay; y <= by; y++) for (let x = ax; x <= bx; x++) pts.push([x, y]);
+  } else {
+    for (let x = ax; x <= bx; x++) { pts.push([x, ay]); if (by !== ay) pts.push([x, by]); }
+    for (let y = ay + 1; y <= by - 1; y++) { pts.push([ax, y]); if (bx !== ax) pts.push([bx, y]); }
+  }
+  return pts;
+}
+
 export type DocAction =
   | { type: "paint" } // 画笔类（含对称）
   | { type: "fill" }
@@ -159,6 +186,7 @@ export function drawLinePoints(
 }
 
 // 洪水填充（返回需修改的坐标集合）
+// 洪水填充：只填充与起点【同色】的连通区域（RGBA 完全相等）
 export function floodFill(
   pixels: Uint8ClampedArray,
   width: number,
@@ -166,12 +194,13 @@ export function floodFill(
   sx: number,
   sy: number,
 ): Array<[number, number]> {
-  const target = getPixel(pixels, width, sx, sy);
-  // 目标为全透明：仅当背景透明时填充
-  if (target[3] === 0) {
-    return floodFillMatching(pixels, width, height, sx, sy, (_r, _g, _b, a) => a === 0);
-  }
-  return floodFillMatching(pixels, width, height, sx, sy, (_r, _g, _b, a) => a > 0);
+  const t = getPixel(pixels, width, sx, sy);
+  // 全透明像素只比 alpha（RGB 无意义）；否则四通道精确匹配
+  const match = t[3] === 0
+    ? (_r: number, _g: number, _b: number, a: number) => a === 0
+    : (r: number, g: number, b: number, a: number) =>
+        r === t[0] && g === t[1] && b === t[2] && a === t[3];
+  return floodFillMatching(pixels, width, height, sx, sy, match);
 }
 
 function floodFillMatching(
@@ -203,33 +232,122 @@ function floodFillMatching(
   return out;
 }
 
-// ---------- 撤销快照栈 ----------
+// 调整画布尺寸（保留已有内容，左上对齐；变小则裁切）
+export function resizeDoc(doc: PixelDoc, width: number, height: number): PixelDoc {
+  const copyW = Math.min(doc.width, width);
+  const copyH = Math.min(doc.height, height);
+  return {
+    width,
+    height,
+    layers: doc.layers.map((l) => {
+      const pixels = new Uint8ClampedArray(width * height * 4);
+      for (let y = 0; y < copyH; y++) {
+        const srcStart = y * doc.width * 4;
+        const src = l.pixels.subarray(srcStart, srcStart + copyW * 4);
+        pixels.set(src, y * width * 4);
+      }
+      return { ...l, pixels };
+    }),
+  };
+}
+
+// ---------- 增量撤销（只记录变更的像素，不再整幅快照） ----------
+export type Rgba = [number, number, number, number];
+
+export interface PixelChange {
+  idx: number; // 像素索引（相对图层起点）
+  before: Rgba;
+  after: Rgba;
+}
+
+export type UndoEntry =
+  | { kind: "pixels"; layerId: string; changes: PixelChange[] }
+  | { kind: "doc"; doc: PixelDoc };
+
+// 笔画记录器：一边画一边记录每个被改动像素的 before/after
+// 内存与“笔画画了几个像素”成正比，而不是与画布大小成正比
+export class StrokeRecorder {
+  private map = new Map<number, { before: Rgba; after: Rgba }>();
+  private layerId: string;
+
+  constructor(layerId: string) {
+    this.layerId = layerId;
+  }
+
+  touch(idx: number, before: Rgba, after: Rgba) {
+    const existing = this.map.get(idx);
+    if (existing) existing.after = after;
+    else this.map.set(idx, { before, after });
+  }
+
+  get size() {
+    return this.map.size;
+  }
+
+  entry(): UndoEntry | null {
+    if (this.map.size === 0) return null;
+    const changes: PixelChange[] = [];
+    for (const [idx, v] of this.map) changes.push({ idx, before: v.before, after: v.after });
+    return { kind: "pixels", layerId: this.layerId, changes };
+  }
+}
+
+// 把像素条目应用到文档的某个图层（before=撤销 / after=重做）
+export function applyPixelChanges(
+  doc: PixelDoc,
+  layerId: string,
+  changes: PixelChange[],
+  mode: "before" | "after",
+): boolean {
+  const layer = doc.layers.find((l) => l.id === layerId);
+  if (!layer) return false;
+  for (const c of changes) {
+    const v = mode === "before" ? c.before : c.after;
+    const i = c.idx * 4;
+    layer.pixels[i] = v[0];
+    layer.pixels[i + 1] = v[1];
+    layer.pixels[i + 2] = v[2];
+    layer.pixels[i + 3] = v[3];
+  }
+  return true;
+}
+
 export class History {
-  private undoStack: PixelDoc[] = [];
-  private redoStack: PixelDoc[] = [];
+  private undoStack: UndoEntry[] = [];
+  private redoStack: UndoEntry[] = [];
   private limit: number;
-  constructor(limit = 60) {
+  constructor(limit = 80) {
     this.limit = limit;
   }
 
-  push(doc: PixelDoc) {
-    this.undoStack.push(cloneDoc(doc));
+  // 结构性操作（图层增删/移动/画布调整/导入）：整幅快照（低频，可接受）
+  pushDoc(doc: PixelDoc) {
+    this.push({ kind: "doc", doc: cloneDoc(doc) });
+  }
+
+  push(entry: UndoEntry) {
+    this.undoStack.push(entry);
     if (this.undoStack.length > this.limit) this.undoStack.shift();
     this.redoStack = [];
   }
 
-  undo(current: PixelDoc): PixelDoc | null {
-    const prev = this.undoStack.pop();
-    if (!prev) return null;
-    this.redoStack.push(cloneDoc(current));
-    return prev;
+  // 弹出最近一条撤销（不自动入重做栈，由调用方决定）
+  popUndo(): UndoEntry | null {
+    return this.undoStack.pop() ?? null;
   }
 
-  redo(current: PixelDoc): PixelDoc | null {
-    const next = this.redoStack.pop();
-    if (!next) return null;
-    this.undoStack.push(cloneDoc(current));
-    return next;
+  popRedo(): UndoEntry | null {
+    return this.redoStack.pop() ?? null;
+  }
+
+  pushRedo(entry: UndoEntry) {
+    this.redoStack.push(entry);
+    if (this.redoStack.length > this.limit) this.redoStack.shift();
+  }
+
+  reset() {
+    this.undoStack = [];
+    this.redoStack = [];
   }
 
   get canUndo() { return this.undoStack.length > 0; }

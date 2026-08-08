@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  composite, createDoc, drawLinePoints, floodFill, getPixel,
-  History, mirrorPoints, putPixel, uid,
-  type Layer, type MirrorMode, type PixelDoc, type Tool,
+  applyPixelChanges, brushOffsets, cloneDoc, composite, createDoc,
+  drawLinePoints, floodFill, getPixel, History, mirrorPoints, putPixel,
+  rectPoints, resizeDoc, StrokeRecorder, uid,
+  type Layer, type MirrorMode, type PixelDoc, type Rgba, type Tool,
 } from "../lib/pixelDoc";
-import { DEFAULT_PALETTE, hexToRgb, PRESET_PALETTES, rgbToHex, type Palette } from "../lib/palette";
+import { DEFAULT_PALETTE, parseHex, PRESET_PALETTES, rgbToHex, type Palette } from "../lib/palette";
+import { downloadProject, readProjectFile } from "../lib/persist";
 import { Pencil } from "./icons/pencil";
 import { Eraser } from "./icons/eraser";
 import { Eyedropper } from "./icons/eyedropper";
@@ -12,6 +14,8 @@ import { PaintBucket } from "./icons/paint-bucket";
 import { Undo } from "./icons/undo";
 import { Redo } from "./icons/redo";
 import { Trash } from "./icons/trash";
+import { Download } from "./icons/download";
+import { Upload } from "./icons/upload";
 import { Line } from "./icons/line";
 import { Rect } from "./icons/rect";
 import PixelIcon from "../lib/PixelIcon";
@@ -20,288 +24,561 @@ import type { PxlKitData } from "../lib/pixelTypes";
 interface EditorProps {
   doc: PixelDoc;
   setDoc: (d: PixelDoc) => void;
+  onNotice?: (msg: string) => void;
 }
 
 const ZOOMS = [1, 2, 4, 8, 16, 32];
 
-const TOOLS: Array<{ id: Tool; label: string; icon: PxlKitData }> = [
-  { id: "pencil", label: "铅笔", icon: Pencil },
-  { id: "eraser", label: "橡皮", icon: Eraser },
-  { id: "picker", label: "取色", icon: Eyedropper },
-  { id: "fill", label: "填充", icon: PaintBucket },
-  { id: "line", label: "直线", icon: Line },
-  { id: "rect", label: "矩形", icon: Rect },
+const TOOLS: Array<{ id: Tool; label: string; icon: PxlKitData; key: string }> = [
+  { id: "pencil", label: "铅笔", icon: Pencil, key: "B" },
+  { id: "eraser", label: "橡皮", icon: Eraser, key: "E" },
+  { id: "picker", label: "取色", icon: Eyedropper, key: "I" },
+  { id: "fill", label: "填充", icon: PaintBucket, key: "G" },
+  { id: "line", label: "直线", icon: Line, key: "L" },
+  { id: "rect", label: "矩形", icon: Rect, key: "R" },
 ];
 
-export default function Editor({ doc, setDoc }: EditorProps) {
+const MIRRORS: Array<{ id: MirrorMode; label: string; glyph: string }> = [
+  { id: "none", label: "对称关", glyph: "◯" },
+  { id: "x", label: "水平对称", glyph: "⇔" },
+  { id: "y", label: "垂直对称", glyph: "⇕" },
+  { id: "both", label: "双向对称", glyph: "✛" },
+];
+
+const TRANSPARENT: Rgba = [0, 0, 0, 0];
+
+export default function Editor({ doc, setDoc, onNotice }: EditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
   const historyRef = useRef(new History(80));
+  const recorderRef = useRef<StrokeRecorder | null>(null);
+  const layerCanvasesRef = useRef<Array<{ canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D }>>([]);
+  const layerSigRef = useRef("");
+  const projectInputRef = useRef<HTMLInputElement>(null);
   const [, setVersion] = useState(0);
   const refresh = () => setVersion((v) => v + 1);
 
   const [tool, setTool] = useState<Tool>("pencil");
   const [color, setColor] = useState<string>(DEFAULT_PALETTE.colors[3]);
+  const [colorText, setColorText] = useState<string>(DEFAULT_PALETTE.colors[3]);
   const [palette, setPalette] = useState<Palette>(DEFAULT_PALETTE);
   const [mirror, setMirror] = useState<MirrorMode>("none");
   const [zoom, setZoom] = useState(8);
   const [showGrid, setShowGrid] = useState(true);
   const [activeLayer, setActiveLayer] = useState(0);
   const [brushSize, setBrushSize] = useState(1);
-
-  // 新建画布表单
-  const [newW, setNewW] = useState(32);
-  const [newH, setNewH] = useState(32);
-  // 导出倍数
+  const [rectFilled, setRectFilled] = useState(false);
+  const [sizeW, setSizeW] = useState(doc.width);
+  const [sizeH, setSizeH] = useState(doc.height);
   const [exportScale, setExportScale] = useState(4);
 
-  const dragRef = useRef<{ x: number; y: number; drawing: boolean }>({ x: 0, y: 0, drawing: false });
-  const previewRef = useRef<{ x: number; y: number } | null>(null);
+  const drag = useRef({ drawing: false, tool: "pencil" as Tool, x: 0, y: 0, lastX: 0, lastY: 0 });
 
-  // ---------- 渲染到画布 ----------
+  // activeLayer 始终有效
+  const layerIndex = Math.min(activeLayer, doc.layers.length - 1);
+  useEffect(() => {
+    if (activeLayer > doc.layers.length - 1) setActiveLayer(doc.layers.length - 1);
+  }, [doc.layers.length, activeLayer]);
+
+  // 画布尺寸变化时同步表单
+  useEffect(() => {
+    setSizeW(doc.width);
+    setSizeH(doc.height);
+  }, [doc.width, doc.height]);
+
+  // ---------- 渲染：逐图层离屏画布 + GPU 合成（不再每帧全量 CPU 混合） ----------
+  // 把某图层像素同步到它的离屏画布（笔画过程中高频调用，只拷贝一层）
+  const syncLayerCanvas = useCallback((index: number) => {
+    const lcs = layerCanvasesRef.current;
+    const layer = doc.layers[index];
+    const lc = lcs[index];
+    if (!layer || !lc) return;
+    const img = lc.ctx.createImageData(doc.width, doc.height);
+    img.data.set(layer.pixels);
+    lc.ctx.putImageData(img, 0, 0);
+  }, [doc.width, doc.height, doc.layers]);
+
+  // 重建所有离屏画布（结构性变化 / 撤销重做文档级条目时）
+  const rebuildLayerCanvases = useCallback((target?: PixelDoc) => {
+    const d = target ?? doc;
+    const lcs = d.layers.map(() => {
+      const c = document.createElement("canvas");
+      c.width = d.width;
+      c.height = d.height;
+      return { canvas: c, ctx: c.getContext("2d")! };
+    });
+    d.layers.forEach((l, i) => {
+      const img = lcs[i].ctx.createImageData(d.width, d.height);
+      img.data.set(l.pixels);
+      lcs[i].ctx.putImageData(img, 0, 0);
+    });
+    layerCanvasesRef.current = lcs;
+    layerSigRef.current = d.layers.map((l) => l.id).join(",") + `@${d.width}x${d.height}`;
+  }, [doc]);
+
+  // 合成显示：按顺序把可见图层画到主画布（drawImage 由浏览器 GPU 加速）
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.width = doc.width;
-    canvas.height = doc.height;
+    if (canvas.width !== doc.width || canvas.height !== doc.height) {
+      canvas.width = doc.width;
+      canvas.height = doc.height;
+    }
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const img = ctx.createImageData(doc.width, doc.height);
-    img.data.set(composite(doc));
-    ctx.putImageData(img, 0, 0);
-  }, [doc]);
+
+    // 自愈：离屏画布与文档不一致时重建（结构性变化 / 文档级撤销）
+    const sig = doc.layers.map((l) => l.id).join(",") + `@${doc.width}x${doc.height}`;
+    if (layerCanvasesRef.current.length !== doc.layers.length || layerSigRef.current !== sig) {
+      rebuildLayerCanvases();
+    }
+    const lcs = layerCanvasesRef.current;
+
+    ctx.clearRect(0, 0, doc.width, doc.height);
+    for (let i = 0; i < doc.layers.length; i++) {
+      const l = doc.layers[i];
+      if (!l.visible || l.opacity <= 0) continue;
+      ctx.globalAlpha = l.opacity;
+      ctx.drawImage(lcs[i].canvas, 0, 0);
+    }
+    ctx.globalAlpha = 1;
+  }, [doc, rebuildLayerCanvases]);
 
   useEffect(() => { draw(); }, [draw]);
 
-  // 预览（直线/矩形拖动时覆盖画）
-  const drawPreview = useCallback((ex: number, ey: number) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    draw();
-    const s = dragRef.current;
-    if (tool === "line") {
-      ctx.strokeStyle = color;
-      ctx.lineWidth = Math.max(brushSize, 1);
-      ctx.lineCap = "square";
-      ctx.beginPath();
-      ctx.moveTo(s.x + 0.5, s.y + 0.5);
-      ctx.lineTo(ex + 0.5, ey + 0.5);
-      ctx.stroke();
-    } else if (tool === "rect") {
-      ctx.fillStyle = color;
-      ctx.globalAlpha = 0.4;
-      const x = Math.min(s.x, ex), y = Math.min(s.y, ey);
-      const w = Math.abs(ex - s.x) + 1, h = Math.abs(ey - s.y) + 1;
-      ctx.fillRect(x, y, w, h);
-      ctx.globalAlpha = 1;
+  const clearOverlay = useCallback(() => {
+    const o = overlayRef.current;
+    if (!o) return;
+    if (o.width !== doc.width || o.height !== doc.height) {
+      o.width = doc.width;
+      o.height = doc.height;
     }
-  }, [draw, tool, color, brushSize]);
+    o.getContext("2d")?.clearRect(0, 0, o.width, o.height);
+  }, [doc.width, doc.height]);
 
-  // ---------- 应用颜色到一组坐标 ----------
-  const applyToLayer = useCallback((layer: Layer, pts: Array<[number, number]>, rgba: [number, number, number, number]) => {
-    for (const [x, y] of pts) putPixel(layer.pixels, doc.width, x, y, rgba[0], rgba[1], rgba[2], rgba[3]);
-  }, [doc.width]);
+  useEffect(() => { clearOverlay(); }, [clearOverlay]);
 
-  const currentColorRgba = (): [number, number, number, number] => {
-    const [r, g, b] = hexToRgb(color);
-    return [r, g, b, 255];
-  };
+  // ---------- 工具落点计算（预览与落笔共用，保证完全一致） ----------
+  const expand = useCallback((base: Array<[number, number]>): Array<[number, number]> => {
+    const offsets = brushOffsets(brushSize);
+    const seen = new Set<number>();
+    const out: Array<[number, number]> = [];
+    for (const [bx, by] of base) {
+      for (const [ox, oy] of offsets) {
+        for (const [x, y] of mirrorPoints(doc.width, doc.height, bx + ox, by + oy, mirror)) {
+          const key = y * doc.width + x;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push([x, y]);
+        }
+      }
+    }
+    return out;
+  }, [brushSize, mirror, doc.width, doc.height]);
 
-  // ---------- 鼠标/触摸事件 ----------
-  const canvasToPixel = (e: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
+  const shapePoints = useCallback((t: Tool, x0: number, y0: number, x1: number, y1: number) => {
+    if (t === "line") return expand(drawLinePoints(x0, y0, x1, y1));
+    if (t === "rect") return expand(rectPoints(x0, y0, x1, y1, rectFilled));
+    return expand([[x1, y1]]);
+  }, [expand, rectFilled]);
+
+  // 预览：把「将要落下的确切像素」画到叠加层
+  const showPreview = useCallback((pts: Array<[number, number]>, erasing: boolean) => {
+    const o = overlayRef.current;
+    if (!o) return;
+    if (o.width !== doc.width || o.height !== doc.height) {
+      o.width = doc.width;
+      o.height = doc.height;
+    }
+    const ctx = o.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, o.width, o.height);
+    const rgb = parseHex(color) ?? [0, 0, 0];
+    const img = ctx.createImageData(o.width, o.height);
+    for (const [x, y] of pts) {
+      const i = (y * o.width + x) * 4;
+      if (erasing) {
+        img.data[i] = 220; img.data[i + 1] = 60; img.data[i + 2] = 60; img.data[i + 3] = 150;
+      } else {
+        img.data[i] = rgb[0]; img.data[i + 1] = rgb[1]; img.data[i + 2] = rgb[2]; img.data[i + 3] = 235;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }, [color, doc.width, doc.height]);
+
+  // ---------- 写入 ----------
+  const currentRgba = useCallback((): Rgba => {
+    const rgb = parseHex(color);
+    if (!rgb) return [0, 0, 0, 255];
+    return [rgb[0], rgb[1], rgb[2], 255];
+  }, [color]);
+
+  const applyPoints = useCallback((pts: Array<[number, number]>, rgba: Rgba) => {
+    const layer = doc.layers[layerIndex];
+    if (!layer) return;
+    const rec = recorderRef.current;
+    for (const [x, y] of pts) {
+      const idx = y * doc.width + x;
+      const i = idx * 4;
+      const before: Rgba = [layer.pixels[i], layer.pixels[i + 1], layer.pixels[i + 2], layer.pixels[i + 3]];
+      putPixel(layer.pixels, doc.width, x, y, rgba[0], rgba[1], rgba[2], rgba[3]);
+      rec?.touch(idx, before, rgba);
+    }
+  }, [doc, layerIndex]);
+
+  // 提交结构变化（触发重渲染 + 上层自动保存）
+  const commit = useCallback(() => {
+    setDoc({ ...doc, layers: [...doc.layers] });
+  }, [doc, setDoc]);
+
+  // ---------- 指针事件 ----------
+  const toPixel = (e: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
     const x = Math.floor(((e.clientX - rect.left) / rect.width) * doc.width);
     const y = Math.floor(((e.clientY - rect.top) / rect.height) * doc.height);
-    return [Math.max(0, Math.min(doc.width - 1, x)), Math.max(0, Math.min(doc.height - 1, y))];
+    return [
+      Math.max(0, Math.min(doc.width - 1, x)),
+      Math.max(0, Math.min(doc.height - 1, y)),
+    ];
   };
 
-  const getLayer = (): Layer => doc.layers[Math.min(activeLayer, doc.layers.length - 1)];
-
-  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+  const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.button !== undefined && e.button !== 0) return;
     e.preventDefault();
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    const [x, y] = canvasToPixel(e);
-    dragRef.current = { x, y, drawing: true };
-    const layer = getLayer();
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* 指针捕获失败不阻断绘制（如合成事件/部分浏览器） */
+    }
+    const [x, y] = toPixel(e);
 
+    // 取色：透明处不改色
     if (tool === "picker") {
       const img = composite(doc);
-      const [r, g, b] = getPixel(img, doc.width, x, y);
-      setColor(rgbToHex(r, g, b));
+      const [r, g, b, a] = getPixel(img, doc.width, x, y);
+      if (a === 0) {
+        onNotice?.("这里是透明像素，未取色");
+      } else {
+        const hex = rgbToHex(r, g, b);
+        setColor(hex);
+        setColorText(hex);
+      }
       return;
     }
 
-    historyRef.current.push(doc);
-    refresh();
+    drag.current = { drawing: true, tool, x, y, lastX: x, lastY: y };
 
+    // 填充：一次性操作，立即完成并入历史
     if (tool === "fill") {
-      const pts = floodFill(layer.pixels, doc.width, doc.height, x, y);
-      applyToLayer(layer, pts, currentColorRgba());
-      draw();
+      const layer = doc.layers[layerIndex];
+      if (layer) {
+        const rec = new StrokeRecorder(layer.id);
+        recorderRef.current = rec;
+        const pts = floodFill(layer.pixels, doc.width, doc.height, x, y);
+        applyPoints(pts, currentRgba());
+        recorderRef.current = null;
+        const entry = rec.entry();
+        if (entry) historyRef.current.push(entry);
+        syncLayerCanvas(layerIndex);
+        draw();
+        commit();
+      }
+      drag.current.drawing = false;
+      refresh();
       return;
     }
 
+    // 铅笔/橡皮/直线/矩形：开始记录本次笔画（增量撤销，不整幅快照）
+    recorderRef.current = new StrokeRecorder(doc.layers[layerIndex].id);
     if (tool === "pencil" || tool === "eraser") {
-      const rgba: [number, number, number, number] = tool === "eraser" ? [0, 0, 0, 0] : currentColorRgba();
-      stamp(layer, x, y, rgba);
+      applyPoints(expand([[x, y]]), tool === "eraser" ? TRANSPARENT : currentRgba());
+      syncLayerCanvas(layerIndex);
       draw();
+      refresh();
     } else {
-      // line / rect：等待拖动
-      previewRef.current = { x, y };
-      drawPreview(x, y);
+      showPreview(shapePoints(tool, x, y, x, y), false);
+      refresh();
     }
   };
 
-  const stamp = (layer: Layer, x: number, y: number, rgba: [number, number, number, number]) => {
-    const pts = mirrorPoints(doc.width, doc.height, x, y, mirror);
-    applyToLayer(layer, pts, rgba);
-    if (brushSize > 1) {
-      const half = Math.floor(brushSize / 2);
-      for (let dx = -half; dx <= half; dx++) {
-        for (let dy = -half; dy <= half; dy++) {
-          if (dx === 0 && dy === 0) continue;
-          const pts2 = mirrorPoints(doc.width, doc.height, x + dx, y + dy, mirror);
-          applyToLayer(layer, pts2, rgba);
-        }
-      }
-    }
-  };
+  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!drag.current.drawing) return;
+    const [x, y] = toPixel(e);
+    const t = drag.current.tool;
 
-  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!dragRef.current.drawing) return;
-    const [x, y] = canvasToPixel(e);
-    const layer = getLayer();
-    if (tool === "pencil" || tool === "eraser") {
-      const rgba: [number, number, number, number] = tool === "eraser" ? [0, 0, 0, 0] : currentColorRgba();
-      const line = drawLinePoints(dragRef.current.x, dragRef.current.y, x, y);
-      for (const [lx, ly] of line) stamp(layer, lx, ly, rgba);
-      dragRef.current.x = x;
-      dragRef.current.y = y;
+    if (t === "pencil" || t === "eraser") {
+      if (x === drag.current.lastX && y === drag.current.lastY) return;
+      const path = drawLinePoints(drag.current.lastX, drag.current.lastY, x, y);
+      applyPoints(expand(path), t === "eraser" ? TRANSPARENT : currentRgba());
+      drag.current.lastX = x;
+      drag.current.lastY = y;
+      syncLayerCanvas(layerIndex);
       draw();
-    } else if (tool === "line" || tool === "rect") {
-      drawPreview(x, y);
+    } else if (t === "line" || t === "rect") {
+      showPreview(shapePoints(t, drag.current.x, drag.current.y, x, y), false);
     }
   };
 
-  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!dragRef.current.drawing) return;
-    dragRef.current.drawing = false;
-    const [x, y] = canvasToPixel(e);
-    const layer = getLayer();
-    const s = dragRef.current;
-    previewRef.current = null;
+  // 收尾一笔：把记录器转成历史条目（只存变更像素）
+  const finalizeStroke = () => {
+    const rec = recorderRef.current;
+    recorderRef.current = null;
+    const entry = rec?.entry() ?? null;
+    if (entry) historyRef.current.push(entry);
+  };
 
-    if (tool === "line") {
-      // 对对称点逐组连线
-      const starts = mirrorPoints(doc.width, doc.height, s.x, s.y, mirror);
-      const ends = mirrorPoints(doc.width, doc.height, x, y, mirror);
-      const rgba = currentColorRgba();
-      for (let i = 0; i < starts.length; i++) {
-        const line = drawLinePoints(starts[i][0], starts[i][1], ends[i][0], ends[i][1]);
-        applyToLayer(layer, line, rgba);
-      }
-      draw();
-    } else if (tool === "rect") {
-      const starts = mirrorPoints(doc.width, doc.height, s.x, s.y, mirror);
-      const ends = mirrorPoints(doc.width, doc.height, x, y, mirror);
-      const rgba = currentColorRgba();
-      for (let i = 0; i < starts.length; i++) {
-        const x0 = Math.min(starts[i][0], ends[i][0]);
-        const y0 = Math.min(starts[i][1], ends[i][1]);
-        const x1 = Math.max(starts[i][0], ends[i][0]);
-        const y1 = Math.max(starts[i][1], ends[i][1]);
-        const pts: Array<[number, number]> = [];
-        for (let px = x0; px <= x1; px++) { pts.push([px, y0], [px, y1]); }
-        for (let py = y0; py <= y1; py++) { pts.push([x0, py], [x1, py]); }
-        applyToLayer(layer, pts, rgba);
-      }
+  const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!drag.current.drawing) return;
+    drag.current.drawing = false;
+    const [x, y] = toPixel(e);
+    const t = drag.current.tool;
+
+    if (t === "line" || t === "rect") {
+      applyPoints(shapePoints(t, drag.current.x, drag.current.y, x, y), currentRgba());
+      clearOverlay();
+      syncLayerCanvas(layerIndex);
       draw();
     }
+    finalizeStroke();
+    commit();
+    refresh();
   };
 
-  // ---------- 撤销 / 重做 ----------
-  const undo = () => {
-    const prev = historyRef.current.undo(doc);
-    if (prev) { setDoc(prev); refresh(); }
-  };
-  const redo = () => {
-    const next = historyRef.current.redo(doc);
-    if (next) { setDoc(next); refresh(); }
+  // 指针取消：直线/矩形还没落笔则丢弃；铅笔/橡皮保留已画部分
+  const onPointerCancel = () => {
+    if (!drag.current.drawing) return;
+    const t = drag.current.tool;
+    drag.current.drawing = false;
+    clearOverlay();
+    if (t === "line" || t === "rect") {
+      recorderRef.current = null; // 未落笔，不留历史
+      refresh();
+      return;
+    }
+    finalizeStroke();
+    commit();
+    refresh();
   };
 
-  // ---------- 图层操作 ----------
-  const addLayer = () => {
-    const layer: Layer = { id: uid(), name: `图层 ${doc.layers.length + 1}`, visible: true, opacity: 1, pixels: new Uint8ClampedArray(doc.width * doc.height * 4) };
+  // ---------- 历史（增量像素条目 + 结构性文档条目） ----------
+  const undo = useCallback(() => {
+    const entry = historyRef.current.popUndo();
+    if (!entry) return;
+    if (entry.kind === "pixels") {
+      applyPixelChanges(doc, entry.layerId, entry.changes, "before");
+      historyRef.current.pushRedo(entry);
+      const idx = doc.layers.findIndex((l) => l.id === entry.layerId);
+      if (idx >= 0) syncLayerCanvas(idx);
+      draw();
+      setDoc({ ...doc, layers: [...doc.layers] });
+    } else {
+      historyRef.current.pushRedo({ kind: "doc", doc: cloneDoc(doc) });
+      rebuildLayerCanvases(entry.doc);
+      setDoc(entry.doc); // draw effect 会随渲染刷新
+    }
+    setActiveLayer((i) => Math.min(i, doc.layers.length - 1));
+    refresh();
+  }, [doc, setDoc, syncLayerCanvas, draw, rebuildLayerCanvases]);
+
+  const redo = useCallback(() => {
+    const entry = historyRef.current.popRedo();
+    if (!entry) return;
+    if (entry.kind === "pixels") {
+      applyPixelChanges(doc, entry.layerId, entry.changes, "after");
+      historyRef.current.push(entry);
+      const idx = doc.layers.findIndex((l) => l.id === entry.layerId);
+      if (idx >= 0) syncLayerCanvas(idx);
+      draw();
+      setDoc({ ...doc, layers: [...doc.layers] });
+    } else {
+      historyRef.current.push({ kind: "doc", doc: cloneDoc(doc) });
+      rebuildLayerCanvases(entry.doc);
+      setDoc(entry.doc);
+    }
+    setActiveLayer((i) => Math.min(i, doc.layers.length - 1));
+    refresh();
+  }, [doc, setDoc, syncLayerCanvas, draw, rebuildLayerCanvases]);
+
+  // ---------- 图层（全部入历史） ----------
+  const withHistory = (fn: () => void) => {
+    historyRef.current.pushDoc(doc);
+    fn();
+    refresh();
+  };
+
+  const addLayer = () => withHistory(() => {
+    const layer: Layer = {
+      id: uid(),
+      name: `图层 ${doc.layers.length + 1}`,
+      visible: true,
+      opacity: 1,
+      pixels: new Uint8ClampedArray(doc.width * doc.height * 4),
+    };
     setDoc({ ...doc, layers: [...doc.layers, layer] });
     setActiveLayer(doc.layers.length);
-  };
+  });
+
   const removeLayer = (i: number) => {
-    if (doc.layers.length <= 1) return;
-    const layers = doc.layers.filter((_, idx) => idx !== i);
-    setDoc({ ...doc, layers });
-    setActiveLayer(Math.min(activeLayer, layers.length - 1));
+    if (doc.layers.length <= 1) {
+      onNotice?.("至少要保留一个图层");
+      return;
+    }
+    const name = doc.layers[i]?.name ?? "该图层";
+    if (!confirm(`删除「${name}」？可以用撤销恢复。`)) return;
+    withHistory(() => {
+      const layers = doc.layers.filter((_, idx) => idx !== i);
+      setDoc({ ...doc, layers });
+      setActiveLayer(Math.min(i, layers.length - 1));
+    });
   };
+
   const moveLayer = (i: number, dir: -1 | 1) => {
     const j = i + dir;
     if (j < 0 || j >= doc.layers.length) return;
-    const layers = [...doc.layers];
-    [layers[i], layers[j]] = [layers[j], layers[i]];
-    setDoc({ ...doc, layers });
-    setActiveLayer(j);
+    withHistory(() => {
+      const layers = [...doc.layers];
+      [layers[i], layers[j]] = [layers[j], layers[i]];
+      setDoc({ ...doc, layers });
+      setActiveLayer(j);
+    });
   };
-  const toggleLayer = (i: number) => {
-    const layers = doc.layers.map((l, idx) => (idx === i ? { ...l, visible: !l.visible } : l));
-    setDoc({ ...doc, layers });
-  };
+
+  const toggleLayer = (i: number) => withHistory(() => {
+    setDoc({ ...doc, layers: doc.layers.map((l, idx) => (idx === i ? { ...l, visible: !l.visible } : l)) });
+  });
+
   const setLayerOpacity = (i: number, opacity: number) => {
-    const layers = doc.layers.map((l, idx) => (idx === i ? { ...l, opacity } : l));
-    setDoc({ ...doc, layers });
+    setDoc({ ...doc, layers: doc.layers.map((l, idx) => (idx === i ? { ...l, opacity } : l)) });
   };
 
-  // ---------- 新建画布 ----------
+  const clearLayer = () => {
+    if (!confirm("清空当前图层？可以用撤销恢复。")) return;
+    withHistory(() => {
+      const layer = doc.layers[layerIndex];
+      if (layer) layer.pixels.fill(0);
+      syncLayerCanvas(layerIndex);
+      draw();
+      setDoc({ ...doc, layers: [...doc.layers] });
+    });
+  };
+
+  // ---------- 画布尺寸 ----------
+  const clampSize = (v: number) => Math.max(1, Math.min(512, Math.round(v) || 1));
+
+  const applyResize = () => {
+    const w = clampSize(sizeW);
+    const h = clampSize(sizeH);
+    if (w === doc.width && h === doc.height) return;
+    const shrinking = w < doc.width || h < doc.height;
+    if (shrinking && !confirm(`缩小画布会裁掉超出部分（${doc.width}×${doc.height} → ${w}×${h}），继续？`)) return;
+    withHistory(() => setDoc(resizeDoc(doc, w, h)));
+    onNotice?.(`画布已调整为 ${w}×${h}（内容保留）`);
+  };
+
   const newCanvas = () => {
-    const w = Math.max(1, Math.min(512, Math.round(newW)));
-    const h = Math.max(1, Math.min(512, Math.round(newH)));
-    historyRef.current = new History(80);
-    setDoc(createDoc(w, h));
-    setActiveLayer(0);
-    refresh();
+    const w = clampSize(sizeW);
+    const h = clampSize(sizeH);
+    if (!confirm(`新建 ${w}×${h} 空白画布？当前内容会被清空（可撤销）。`)) return;
+    withHistory(() => {
+      setDoc(createDoc(w, h));
+      setActiveLayer(0);
+    });
   };
 
-  // ---------- 导出 PNG ----------
-  const exportPng = () => {
+  // ---------- 导出 / 工程 ----------
+  const exportPng = useCallback(() => {
     const scale = exportScale;
     const img = composite(doc);
+    const temp = document.createElement("canvas");
+    temp.width = doc.width;
+    temp.height = doc.height;
+    temp.getContext("2d")!.putImageData(new ImageData(img.slice(), doc.width, doc.height), 0, 0);
     const c = document.createElement("canvas");
     c.width = doc.width * scale;
     c.height = doc.height * scale;
     const ctx = c.getContext("2d")!;
     ctx.imageSmoothingEnabled = false;
-    const temp = document.createElement("canvas");
-    temp.width = doc.width;
-    temp.height = doc.height;
-    const tctx = temp.getContext("2d")!;
-    tctx.putImageData(new ImageData(img.slice(), doc.width, doc.height), 0, 0);
     ctx.drawImage(temp, 0, 0, c.width, c.height);
     c.toBlob((blob) => {
       if (!blob) return;
+      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `pixelpaint-${doc.width}x${doc.height}x${scale}.png`;
+      a.href = url;
+      a.download = `pixelpaint-${doc.width}x${doc.height}@${scale}x.png`;
       a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
     }, "image/png");
+  }, [doc, exportScale]);
+
+  const saveProject = useCallback(() => {
+    downloadProject(doc);
+    onNotice?.("工程已保存到下载目录");
+  }, [doc, onNotice]);
+
+  const openProject = async (file: File) => {
+    const next = await readProjectFile(file);
+    if (!next) {
+      onNotice?.("无法读取该工程文件");
+      return;
+    }
+    if (!confirm("打开工程会替换当前画布内容，继续？")) return;
+    historyRef.current.reset();
+    setDoc(next);
+    setActiveLayer(0);
+    refresh();
+    onNotice?.(`已打开工程 ${next.width}×${next.height}`);
   };
 
+  // ---------- 键盘快捷键 ----------
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
+      const mod = e.ctrlKey || e.metaKey;
+
+      if (mod && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo(); else undo();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
+      if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); saveProject(); return; }
+      if (mod && e.key.toLowerCase() === "e") { e.preventDefault(); exportPng(); return; }
+      if (mod) return;
+
+      const k = e.key.toLowerCase();
+      const hit = TOOLS.find((t) => t.key.toLowerCase() === k);
+      if (hit) { setTool(hit.id); return; }
+      if (k === "[") { setBrushSize((s) => Math.max(1, s - 1)); return; }
+      if (k === "]") { setBrushSize((s) => Math.min(5, s + 1)); return; }
+      if (k === "+" || k === "=") {
+        setZoom((z) => ZOOMS[Math.min(ZOOMS.length - 1, ZOOMS.indexOf(z) + 1)] ?? z);
+        return;
+      }
+      if (k === "-") {
+        setZoom((z) => ZOOMS[Math.max(0, ZOOMS.indexOf(z) - 1)] ?? z);
+        return;
+      }
+      if (k === "m") {
+        setMirror((m) => MIRRORS[(MIRRORS.findIndex((x) => x.id === m) + 1) % MIRRORS.length].id);
+        return;
+      }
+      if (k === "g") return; // 已被填充占用
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo, saveProject, exportPng]);
+
   const gridVisible = showGrid && zoom >= 4;
-  const cellPx = zoom;
+  const cell = zoom;
+  const canUndo = historyRef.current.canUndo;
+  const canRedo = historyRef.current.canRedo;
 
   return (
     <div className="editor-layout">
-      {/* 左侧工具条 */}
-      <aside className="card tool-panel">
+      {/* 工具条 */}
+      <aside className="card tool-panel" aria-label="绘图工具">
         <div className="tool-list">
           {TOOLS.map((t) => (
             <button
@@ -309,93 +586,117 @@ export default function Editor({ doc, setDoc }: EditorProps) {
               type="button"
               className={`tool-btn ${tool === t.id ? "active" : ""}`}
               onClick={() => setTool(t.id)}
-              title={t.label}
+              title={`${t.label}（${t.key}）`}
+              aria-label={t.label}
+              aria-pressed={tool === t.id}
             >
               <PixelIcon data={t.icon} size={22} />
               <span>{t.label}</span>
             </button>
           ))}
         </div>
+
         <div className="tool-divider" />
         <div className="tool-list">
-          {(["none", "x", "y", "both"] as const).map((m) => (
+          {MIRRORS.map((m) => (
             <button
-              key={m}
+              key={m.id}
               type="button"
-              className={`tool-btn ${mirror === m ? "active" : ""}`}
-              onClick={() => setMirror(m)}
-              title={m === "none" ? "对称：关" : m === "x" ? "水平对称" : m === "y" ? "垂直对称" : "双向对称"}
+              className={`tool-btn ${mirror === m.id ? "active" : ""}`}
+              onClick={() => setMirror(m.id)}
+              title={`${m.label}（M 循环）`}
+              aria-label={m.label}
+              aria-pressed={mirror === m.id}
             >
-              <span aria-hidden="true" style={{ fontSize: 16 }}>{m === "none" ? "◯" : m === "x" ? "⇔" : m === "y" ? "⇕" : "✛"}</span>
-              <span>对称{m === "none" ? "" : m === "both" ? "双向" : m}</span>
+              <span aria-hidden="true" style={{ fontSize: 16 }}>{m.glyph}</span>
+              <span>{m.id === "none" ? "关" : m.id === "both" ? "双向" : m.id.toUpperCase()}</span>
             </button>
           ))}
         </div>
+
         <div className="tool-divider" />
         <div className="tool-panel-field">
-          <label className="field-label">笔刷</label>
-          <select className="num-input" style={{ width: "100%" }} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))}>
+          <label className="field-label" htmlFor="brush-size">笔刷 [ ]</label>
+          <select id="brush-size" className="num-input" style={{ width: "100%" }} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))}>
             {[1, 2, 3, 4, 5].map((s) => <option key={s} value={s}>{s} px</option>)}
           </select>
         </div>
         <div className="tool-panel-field">
-          <label className="field-label">缩放</label>
-          <select className="num-input" style={{ width: "100%" }} value={zoom} onChange={(e) => setZoom(Number(e.target.value))}>
+          <label className="field-label" htmlFor="zoom-level">缩放 - +</label>
+          <select id="zoom-level" className="num-input" style={{ width: "100%" }} value={zoom} onChange={(e) => setZoom(Number(e.target.value))}>
             {ZOOMS.map((z) => <option key={z} value={z}>{z}×</option>)}
           </select>
         </div>
+        {tool === "rect" && (
+          <label className="ghost-check" style={{ marginTop: 6 }}>
+            <input type="checkbox" checked={rectFilled} onChange={(e) => setRectFilled(e.target.checked)} />
+            填充矩形
+          </label>
+        )}
       </aside>
 
-      {/* 中间画布 */}
+      {/* 画布 */}
       <section className="card canvas-card">
         <div className="canvas-head">
-          <span className="canvas-info">{doc.width} × {doc.height} · 第 {activeLayer + 1}/{doc.layers.length} 层</span>
+          <span className="canvas-info">
+            {doc.width} × {doc.height} · 第 {layerIndex + 1}/{doc.layers.length} 层
+          </span>
           <div className="canvas-actions">
             <label className="ghost-check">
               <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />
               网格
             </label>
-            <button type="button" className="btn-ghost" onClick={undo} disabled={!historyRef.current.canUndo} title="撤销" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "6px 8px" }}>
+            <button type="button" className="btn-ghost icon-btn" onClick={undo} disabled={!canUndo} title="撤销（Ctrl+Z）" aria-label="撤销">
               <PixelIcon data={Undo} size={16} />
             </button>
-            <button type="button" className="btn-ghost" onClick={redo} disabled={!historyRef.current.canRedo} title="重做" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "6px 8px" }}>
+            <button type="button" className="btn-ghost icon-btn" onClick={redo} disabled={!canRedo} title="重做（Ctrl+Shift+Z）" aria-label="重做">
               <PixelIcon data={Redo} size={16} />
             </button>
           </div>
         </div>
         <div className="canvas-stage">
-          <div className="canvas-wrap checker" style={{ width: doc.width * cellPx, height: doc.height * cellPx, backgroundSize: `${cellPx}px ${cellPx}px` }}>
+          <div
+            className="canvas-wrap checker"
+            style={{ width: doc.width * cell, height: doc.height * cell, backgroundSize: `${cell}px ${cell}px` }}
+          >
             <canvas
               ref={canvasRef}
               className="pixelated"
-              style={{ width: doc.width * cellPx, height: doc.height * cellPx, touchAction: "none" }}
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerCancel={handlePointerUp}
+              style={{ width: doc.width * cell, height: doc.height * cell, touchAction: "none" }}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerCancel}
+              aria-label={`像素画布 ${doc.width}×${doc.height}`}
+            />
+            <canvas
+              ref={overlayRef}
+              className="pixelated canvas-overlay"
+              style={{ width: doc.width * cell, height: doc.height * cell }}
+              aria-hidden="true"
             />
             {gridVisible && (
               <div
                 className="canvas-grid"
-                style={{
-                  width: doc.width * cellPx,
-                  height: doc.height * cellPx,
-                  backgroundSize: `${cellPx}px ${cellPx}px`,
-                }}
+                style={{ width: doc.width * cell, height: doc.height * cell, backgroundSize: `${cell}px ${cell}px` }}
               />
             )}
           </div>
         </div>
+        <p className="shortcut-hint">
+          快捷键：B 铅笔 · E 橡皮 · I 取色 · G 填充 · L 直线 · R 矩形 · M 对称 · [ ] 笔刷 · - + 缩放 · Ctrl+Z 撤销 · Ctrl+S 存工程
+        </p>
       </section>
 
       {/* 右侧面板 */}
       <aside className="side-panels">
-        {/* 调色板 */}
         <div className="card palette-card">
           <div className="panel-head">
             <h2 className="card-title">调色板</h2>
           </div>
+          <label className="field-label" htmlFor="palette-select">预设</label>
           <select
+            id="palette-select"
             className="num-input"
             style={{ width: "100%", marginBottom: 10 }}
             value={palette.name}
@@ -415,8 +716,9 @@ export default function Editor({ doc, setDoc }: EditorProps) {
                 type="button"
                 className={`swatch ${color.toLowerCase() === c.toLowerCase() ? "active" : ""}`}
                 style={{ background: c }}
-                onClick={() => setColor(c)}
+                onClick={() => { setColor(c); setColorText(c); }}
                 title={c}
+                aria-label={`颜色 ${c}`}
               />
             ))}
           </div>
@@ -424,47 +726,68 @@ export default function Editor({ doc, setDoc }: EditorProps) {
             <input
               type="color"
               value={color}
-              onChange={(e) => setColor(e.target.value)}
+              onChange={(e) => { setColor(e.target.value); setColorText(e.target.value); }}
+              aria-label="选择颜色"
               style={{ width: 36, height: 32, border: "none", background: "none", padding: 0 }}
             />
             <input
               className="text-input"
               style={{ flex: 1 }}
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
+              value={colorText}
+              onChange={(e) => {
+                setColorText(e.target.value);
+                const rgb = parseHex(e.target.value);
+                if (rgb) setColor(rgbToHex(rgb[0], rgb[1], rgb[2]));
+              }}
+              onBlur={() => setColorText(color)}
+              aria-label="颜色 hex 值"
+              aria-invalid={parseHex(colorText) === null}
               spellCheck={false}
             />
           </div>
+          {parseHex(colorText) === null && (
+            <p style={{ fontSize: 12, color: "var(--amber)", marginTop: 6 }}>
+              hex 无效，仍在使用 {color}
+            </p>
+          )}
         </div>
 
-        {/* 图层 */}
         <div className="card layers-card">
           <div className="panel-head">
             <h2 className="card-title">图层</h2>
-            <button type="button" className="btn-ghost" onClick={addLayer}>＋ 新建</button>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button type="button" className="btn-ghost" onClick={clearLayer}>清空</button>
+              <button type="button" className="btn-ghost" onClick={addLayer}>＋ 新建</button>
+            </div>
           </div>
           <div className="layer-list">
             {doc.layers.map((l, i) => (
-              <div key={l.id} className={`layer-item ${i === activeLayer ? "active" : ""}`} onClick={() => setActiveLayer(i)}>
+              <div
+                key={l.id}
+                className={`layer-item ${i === layerIndex ? "active" : ""}`}
+                onClick={() => setActiveLayer(i)}
+              >
                 <button
                   type="button"
                   className="layer-eye"
                   onClick={(e) => { e.stopPropagation(); toggleLayer(i); }}
-                  title={l.visible ? "隐藏" : "显示"}
+                  title={l.visible ? "隐藏图层" : "显示图层"}
+                  aria-label={l.visible ? `隐藏 ${l.name}` : `显示 ${l.name}`}
                 >
-                  {l.visible ? "👁" : "—"}
+                  {l.visible ? "◉" : "○"}
                 </button>
                 <span className="layer-name">{l.name}</span>
                 <input
                   type="range" min={0} max={100} value={Math.round(l.opacity * 100)}
                   onChange={(e) => setLayerOpacity(i, Number(e.target.value) / 100)}
                   onClick={(e) => e.stopPropagation()}
-                  title="不透明度"
+                  title={`不透明度 ${Math.round(l.opacity * 100)}%`}
+                  aria-label={`${l.name} 不透明度`}
                 />
                 <div className="layer-actions">
-                  <button type="button" className="mini-btn" onClick={(e) => { e.stopPropagation(); moveLayer(i, 1); }} title="上移">↑</button>
-                  <button type="button" className="mini-btn" onClick={(e) => { e.stopPropagation(); moveLayer(i, -1); }} title="下移">↓</button>
-                  <button type="button" className="mini-btn danger" onClick={(e) => { e.stopPropagation(); removeLayer(i); }} title="删除" style={{ display: "inline-flex", alignItems: "center" }}>
+                  <button type="button" className="mini-btn" onClick={(e) => { e.stopPropagation(); moveLayer(i, 1); }} title="上移" aria-label="上移图层">↑</button>
+                  <button type="button" className="mini-btn" onClick={(e) => { e.stopPropagation(); moveLayer(i, -1); }} title="下移" aria-label="下移图层">↓</button>
+                  <button type="button" className="mini-btn danger icon-btn" onClick={(e) => { e.stopPropagation(); removeLayer(i); }} title="删除图层" aria-label={`删除 ${l.name}`}>
                     <PixelIcon data={Trash} size={13} />
                   </button>
                 </div>
@@ -473,24 +796,53 @@ export default function Editor({ doc, setDoc }: EditorProps) {
           </div>
         </div>
 
-        {/* 画布 & 导出 */}
         <div className="card canvas-tools-card">
-          <h2 className="card-title">画布</h2>
+          <h2 className="card-title">画布尺寸</h2>
           <div className="size-row">
-            <input className="num-input" type="number" min={1} max={512} value={newW} onChange={(e) => setNewW(Number(e.target.value))} />
-            <span>×</span>
-            <input className="num-input" type="number" min={1} max={512} value={newH} onChange={(e) => setNewH(Number(e.target.value))} />
-            <button type="button" className="btn-ghost" onClick={newCanvas}>新建</button>
+            <label className="sr-only" htmlFor="canvas-w">宽度</label>
+            <input id="canvas-w" className="num-input" type="number" min={1} max={512} value={sizeW}
+              onChange={(e) => setSizeW(clampSize(Number(e.target.value)))} />
+            <span aria-hidden="true">×</span>
+            <label className="sr-only" htmlFor="canvas-h">高度</label>
+            <input id="canvas-h" className="num-input" type="number" min={1} max={512} value={sizeH}
+              onChange={(e) => setSizeH(clampSize(Number(e.target.value)))} />
           </div>
-          <div className="tool-divider" />
-          <h2 className="card-title">导出</h2>
           <div className="size-row">
-            <span className="field-label" style={{ margin: 0 }}>放大</span>
-            <select className="num-input" style={{ flex: 1 }} value={exportScale} onChange={(e) => setExportScale(Number(e.target.value))}>
+            <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={applyResize}>调整（保留内容）</button>
+            <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={newCanvas}>新建空白</button>
+          </div>
+
+          <div className="tool-divider" />
+          <h2 className="card-title">导出与工程</h2>
+          <div className="size-row">
+            <label className="field-label" style={{ margin: 0 }} htmlFor="export-scale">放大</label>
+            <select id="export-scale" className="num-input" style={{ flex: 1 }} value={exportScale} onChange={(e) => setExportScale(Number(e.target.value))}>
               {[1, 2, 4, 8, 16].map((s) => <option key={s} value={s}>{s}×</option>)}
             </select>
             <button type="button" className="btn-primary" onClick={exportPng}>导出 PNG</button>
           </div>
+          <div className="size-row">
+            <button type="button" className="btn-ghost icon-text-btn" style={{ flex: 1 }} onClick={saveProject}>
+              <PixelIcon data={Download} size={14} /> 保存工程
+            </button>
+            <button type="button" className="btn-ghost icon-text-btn" style={{ flex: 1 }} onClick={() => projectInputRef.current?.click()}>
+              <PixelIcon data={Upload} size={14} /> 打开工程
+            </button>
+            <input
+              ref={projectInputRef}
+              type="file"
+              accept=".json,application/json"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) openProject(f);
+                e.target.value = "";
+              }}
+            />
+          </div>
+          <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+            工程含图层信息，可再次打开继续编辑；画布内容也会自动存本地草稿。
+          </p>
         </div>
       </aside>
     </div>
