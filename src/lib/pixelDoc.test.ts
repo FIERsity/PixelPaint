@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyPixelChanges, brushOffsets, composite, createDoc, drawLinePoints,
-  floodFill, getPixel, History, mirrorPoints, putPixel, rectPoints,
+  floodFill, getPixel, History, putPixel, rectPoints,
   resizeDoc, StrokeRecorder,
 } from "./pixelDoc";
 
@@ -70,21 +70,6 @@ describe("rectPoints", () => {
   });
   it("单像素矩形不重复", () => {
     expect(rectPoints(2, 2, 2, 2, false)).toEqual([[2, 2]]);
-  });
-});
-
-describe("mirrorPoints", () => {
-  it("关闭时只回自身", () => {
-    expect(mirrorPoints(10, 10, 2, 3, "none")).toEqual([[2, 3]]);
-  });
-  it("双向对称产生 4 点", () => {
-    expect(mirrorPoints(10, 10, 1, 2, "both")).toHaveLength(4);
-  });
-  it("中心点对称去重不产生重复", () => {
-    expect(mirrorPoints(5, 5, 2, 2, "both")).toEqual([[2, 2]]);
-  });
-  it("越界点被过滤", () => {
-    expect(mirrorPoints(10, 10, -1, 0, "none")).toHaveLength(0);
   });
 });
 

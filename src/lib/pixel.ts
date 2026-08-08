@@ -77,21 +77,27 @@ export function quantize(
   }
   if (colors.length <= maxColors) return { pixels: out, palette: colors.map((c) => [c.r, c.g, c.b]) };
 
-  // 中值切分：递归把颜色盒子按最宽通道劈开
+  // 中值切分：优先劈开颜色跨度最大的盒子（保留不同色相），像素数做平局裁决
   let boxes: Array<typeof colors> = [colors];
   while (boxes.length < maxColors) {
-    // 找权重最大（像素数最多）的盒子
     let bestIdx = -1;
+    let bestRange = -1;
     let bestWeight = -1;
     for (let i = 0; i < boxes.length; i++) {
-      const w = boxes[i].reduce((s, c) => s + c.count, 0);
-      if (w > bestWeight) { bestWeight = w; bestIdx = i; }
+      const box = boxes[i];
+      if (box.length < 2) continue;
+      const range = boxRange(box);
+      const weight = box.reduce((s, c) => s + c.count, 0);
+      if (range > bestRange || (range === bestRange && weight > bestWeight)) {
+        bestRange = range;
+        bestWeight = weight;
+        bestIdx = i;
+      }
     }
-    const box = boxes[bestIdx];
-    const split = splitBox(box);
+    if (bestIdx < 0) break; // 没有可再劈的盒子
+    const split = splitBox(boxes[bestIdx]);
     if (!split) break;
     boxes.splice(bestIdx, 1, ...split);
-    if (boxes.length >= maxColors) break;
   }
 
   // 每个盒子取加权平均色，重映射
@@ -119,6 +125,16 @@ export function quantize(
   return { pixels: out, palette };
 }
 
+function boxRange(box: Array<{ r: number; g: number; b: number; count: number }>): number {
+  let minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
+  for (const c of box) {
+    if (c.r < minR) minR = c.r; if (c.r > maxR) maxR = c.r;
+    if (c.g < minG) minG = c.g; if (c.g > maxG) maxG = c.g;
+    if (c.b < minB) minB = c.b; if (c.b > maxB) maxB = c.b;
+  }
+  return (maxR - minR) + (maxG - minG) + (maxB - minB);
+}
+
 function splitBox(box: Array<{ r: number; g: number; b: number; count: number }>): [typeof box, typeof box] | null {
   if (box.length < 2) return null;
   let minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
@@ -130,15 +146,31 @@ function splitBox(box: Array<{ r: number; g: number; b: number; count: number }>
   const rangeR = maxR - minR, rangeG = maxG - minG, rangeB = maxB - minB;
   const channel = rangeR >= rangeG && rangeR >= rangeB ? "r" : rangeG >= rangeB ? "g" : "b";
   const sorted = [...box].sort((a, b) => a[channel] - b[channel]);
-  // 按像素数对半
-  const total = sorted.reduce((s, c) => s + c.count, 0);
-  let acc = 0, mid = 0;
-  for (let i = 0; i < sorted.length; i++) {
-    acc += sorted[i].count;
-    if (acc * 2 >= total) { mid = i + 1; break; }
+
+  // 感知色隙：在主导通道找“显著断层”（明显大于簇内典型间隔），
+  // 在断层处劈开，把不同色相簇分开而不是混在一起取平均
+  const gaps: number[] = [];
+  for (let i = 0; i < sorted.length - 1; i++) gaps.push(sorted[i + 1][channel] - sorted[i][channel]);
+  const sortedGaps = [...gaps].sort((a, b) => a - b);
+  const medianGap = sortedGaps[Math.floor(sortedGaps.length / 2)] || 0;
+  const maxGap = sortedGaps[sortedGaps.length - 1];
+  let splitAt = -1;
+  if (maxGap >= 12 && maxGap >= medianGap * 3 + 1) {
+    splitAt = gaps.indexOf(maxGap) + 1;
   }
-  if (mid <= 0 || mid >= sorted.length) return null;
-  return [sorted.slice(0, mid), sorted.slice(mid)];
+
+  // 无显著断层（平滑渐变）或断层在边缘：退回按像素数对半劈
+  if (splitAt <= 0 || splitAt >= sorted.length) {
+    const total = sorted.reduce((s, c) => s + c.count, 0);
+    let acc = 0, mid = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      acc += sorted[i].count;
+      if (acc * 2 >= total) { mid = i + 1; break; }
+    }
+    splitAt = mid;
+  }
+  if (splitAt <= 0 || splitAt >= sorted.length) return null;
+  return [sorted.slice(0, splitAt), sorted.slice(splitAt)];
 }
 
 // ---------- 抖动 ----------

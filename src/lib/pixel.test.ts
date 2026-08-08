@@ -58,6 +58,40 @@ describe("quantize", () => {
     expect(pixels[7]).toBe(0);
   });
 
+  it("主色调占多数时仍保留其它色相（回归：之前按像素数优先导致同色调）", () => {
+    // 大量红色系渐变 + 少量蓝/绿/黄纯色
+    const px = new Uint8ClampedArray(512 * 4);
+    let i = 0;
+    // 400 个红色系（渐变，制造“主色调大量相近色”）
+    for (let n = 0; n < 400; n++) {
+      const v = 40 + (n % 200);
+      px[i++] = v; px[i++] = 10; px[i++] = 10; px[i++] = 255;
+    }
+    // 各 40 个纯蓝/绿/黄
+    for (let n = 0; n < 40; n++) { px[i++] = 0; px[i++] = 0; px[i++] = 255; px[i++] = 255; }
+    for (let n = 0; n < 40; n++) { px[i++] = 0; px[i++] = 255; px[i++] = 0; px[i++] = 255; }
+    for (let n = 0; n < 40; n++) { px[i++] = 255; px[i++] = 255; px[i++] = 0; px[i++] = 255; }
+
+    const { pixels } = quantize(px, 8);
+    // 收集输出颜色，检查蓝/绿/黄是否仍存在（接近各自纯色）
+    const seen = new Set<string>();
+    for (let k = 0; k < pixels.length; k += 4) {
+      if (pixels[k + 3] === 0) continue;
+      const key = `${pixels[k]},${pixels[k + 1]},${pixels[k + 2]}`;
+      seen.add(key);
+    }
+    const near = (c: [number, number, number], tol = 40) =>
+      [...seen].some((s) => {
+        const [r, g, b] = s.split(",").map(Number);
+        return Math.abs(r - c[0]) <= tol && Math.abs(g - c[1]) <= tol && Math.abs(b - c[2]) <= tol;
+      });
+    expect(near([0, 0, 255]), "蓝色应保留").toBe(true);
+    expect(near([0, 255, 0]), "绿色应保留").toBe(true);
+    expect(near([255, 255, 0]), "黄色应保留").toBe(true);
+    // 颜色种类不超过上限
+    expect(seen.size).toBeLessThanOrEqual(8);
+  });
+
   it("maxColors<=0 视为不限色", () => {
     const px = solid(4, 1, [123, 45, 67]);
     const { pixels } = quantize(px, 0);

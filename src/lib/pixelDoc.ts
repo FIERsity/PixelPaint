@@ -17,7 +17,6 @@ export interface PixelDoc {
 }
 
 export type Tool = "pencil" | "eraser" | "picker" | "fill" | "line" | "rect";
-export type MirrorMode = "none" | "x" | "y" | "both";
 
 // 笔刷覆盖的相对偏移（1 = 单像素，n = n×n）
 export function brushOffsets(size: number): Array<[number, number]> {
@@ -136,29 +135,6 @@ export function putPixel(
 export function getPixel(pixels: Uint8ClampedArray, width: number, x: number, y: number) {
   const i = (y * width + x) * 4;
   return [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]] as const;
-}
-
-// 把坐标按对称模式映射，返回一组需绘制的坐标
-export function mirrorPoints(
-  width: number,
-  height: number,
-  x: number,
-  y: number,
-  mode: MirrorMode,
-): Array<[number, number]> {
-  const pts: Array<[number, number]> = [[x, y]];
-  if (mode === "x" || mode === "both") pts.push([width - 1 - x, y]);
-  if (mode === "y" || mode === "both") pts.push([x, height - 1 - y]);
-  if (mode === "both") pts.push([width - 1 - x, height - 1 - y]);
-  // 去重
-  const seen = new Set<string>();
-  return pts.filter(([px, py]) => {
-    if (px < 0 || py < 0 || px >= width || py >= height) return false;
-    const k = `${px},${py}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
 }
 
 export function drawLinePoints(

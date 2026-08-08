@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   applyPixelChanges, brushOffsets, cloneDoc, composite, createDoc,
-  drawLinePoints, floodFill, getPixel, History, mirrorPoints, putPixel,
+  drawLinePoints, floodFill, getPixel, History, putPixel,
   rectPoints, resizeDoc, StrokeRecorder, uid,
-  type Layer, type MirrorMode, type PixelDoc, type Rgba, type Tool,
+  type Layer, type PixelDoc, type Rgba, type Tool,
 } from "../lib/pixelDoc";
 import { DEFAULT_PALETTE, parseHex, PRESET_PALETTES, rgbToHex, type Palette } from "../lib/palette";
 import { Pencil } from "./icons/pencil";
@@ -60,13 +60,6 @@ const TOOLS: Array<{ id: Tool; label: string; icon: PxlKitData; key: string }> =
   { id: "fill", label: "填充", icon: PaintBucket, key: "G" },
   { id: "line", label: "直线", icon: Line, key: "L" },
   { id: "rect", label: "矩形", icon: Rect, key: "R" },
-];
-
-const MIRRORS: Array<{ id: MirrorMode; label: string; glyph: string }> = [
-  { id: "none", label: "对称关", glyph: "◯" },
-  { id: "x", label: "水平对称", glyph: "⇔" },
-  { id: "y", label: "垂直对称", glyph: "⇕" },
-  { id: "both", label: "双向对称", glyph: "✛" },
 ];
 
 const TRANSPARENT: Rgba = [0, 0, 0, 0];
@@ -127,7 +120,6 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
   const [color, setColor] = useState<string>(DEFAULT_PALETTE.colors[3]);
   const [colorText, setColorText] = useState<string>(DEFAULT_PALETTE.colors[3]);
   const [palette, setPalette] = useState<Palette>(DEFAULT_PALETTE);
-  const [mirror, setMirror] = useState<MirrorMode>("none");
   const [zoom, setZoom] = useState(8);
   const [showGrid, setShowGrid] = useState(true);
   const [activeLayer, setActiveLayer] = useState(0);
@@ -257,16 +249,17 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
     const out: Array<[number, number]> = [];
     for (const [bx, by] of base) {
       for (const [ox, oy] of offsets) {
-        for (const [x, y] of mirrorPoints(doc.width, doc.height, bx + ox, by + oy, mirror)) {
-          const key = y * doc.width + x;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          out.push([x, y]);
-        }
+        const x = bx + ox;
+        const y = by + oy;
+        if (x < 0 || y < 0 || x >= doc.width || y >= doc.height) continue;
+        const key = y * doc.width + x;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push([x, y]);
       }
     }
     return out;
-  }, [brushSize, mirror, doc.width, doc.height]);
+  }, [brushSize, doc.width, doc.height]);
 
   const shapePoints = useCallback((t: Tool, x0: number, y0: number, x1: number, y1: number) => {
     if (t === "line") return expand(drawLinePoints(x0, y0, x1, y1));
@@ -641,10 +634,6 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
         setZoom((z) => ZOOMS[Math.max(0, ZOOMS.indexOf(z) - 1)] ?? z);
         return;
       }
-      if (k === "m") {
-        setMirror((m) => MIRRORS[(MIRRORS.findIndex((x) => x.id === m) + 1) % MIRRORS.length].id);
-        return;
-      }
       if (k === " " && animation) {
         e.preventDefault();
         animation.onTogglePlay();
@@ -678,24 +667,6 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
             >
               <PixelIcon data={t.icon} size={22} />
               <span>{t.label}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="tool-divider" />
-        <div className="tool-list">
-          {MIRRORS.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              className={`tool-btn ${mirror === m.id ? "active" : ""}`}
-              onClick={() => setMirror(m.id)}
-              title={`${m.label}（M 循环）`}
-              aria-label={m.label}
-              aria-pressed={mirror === m.id}
-            >
-              <span aria-hidden="true" style={{ fontSize: 16 }}>{m.glyph}</span>
-              <span>{m.id === "none" ? "关" : m.id === "both" ? "双向" : m.id.toUpperCase()}</span>
             </button>
           ))}
         </div>

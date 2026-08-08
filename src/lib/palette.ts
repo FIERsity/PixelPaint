@@ -89,7 +89,7 @@ export const CGA: Palette = {
   ],
 };
 
-export const NO_PALETTE: Palette = { name: "自动（不限色）", colors: [] };
+export const NO_PALETTE: Palette = { name: "自动", colors: [] };
 
 export const PRESET_PALETTES: Palette[] = [
   NO_PALETTE,
