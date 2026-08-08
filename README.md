@@ -21,7 +21,9 @@
 
 ### 背景处理
 
-- 浏览器本地 AI 背景处理
+- 默认使用像素专用颜色抠图：边缘背景采样、OKLab 色差和 4 连通区域
+- 支持连通背景与全局相近色两种清除范围，以及可调颜色容差
+- 浏览器本地 AI 主体识别作为复杂背景的备用方案
 - 像素硬边或柔和边缘
 - 透明 PNG 结果可预览、下载或发送到画板
 
@@ -48,7 +50,10 @@ PixelPaint is a local-first pixel art workstation for drawing, image pixelizatio
 
 - Canvas editor with layers, undo/redo, grids, palettes, and frame animation
 - Pixelization with presets, custom dimensions, extracted palettes, and dithering
-- Local background processing with hard or soft pixel edges
+- Pixel-specific background removal with border-color learning, OKLab distance, and connected regions
+- Connected or global removal scope with adjustable color tolerance
+- Optional local AI subject segmentation for complex backgrounds
+- Hard or soft pixel edges for the AI path
 - Chinese and English UI; feedback is available in the top-right corner
 
 Online: https://FIERsity.github.io/PixelPaint/

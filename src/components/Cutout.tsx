@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { PixelDoc } from "../lib/pixelDoc";
 import { docFromPixels } from "../lib/pixelDoc";
-import { normalizeCutoutBlob, type CutoutEdgeMode } from "../lib/cutout";
+import {
+  normalizeCutoutBlob,
+  removePixelBackgroundBlob,
+  type CutoutEdgeMode,
+  type PixelCutoutScope,
+} from "../lib/cutout";
 import { useI18n } from "../lib/i18n";
 
 interface CutoutProps {
@@ -14,12 +19,16 @@ interface CutoutProps {
 }
 
 type Phase = "idle" | "ready" | "running" | "done" | "error";
+type CutoutMethod = "pixel" | "ai";
 
 export default function Cutout({ inputFile, resultFile, onResult, onImport, onReturnToPixel, onNotice }: CutoutProps) {
   const { t } = useI18n();
   const [phase, setPhase] = useState<Phase>(inputFile ? "ready" : "idle");
   const [progress, setProgress] = useState<{ label: string; pct: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [method, setMethod] = useState<CutoutMethod>("pixel");
+  const [scope, setScope] = useState<PixelCutoutScope>("connected");
+  const [tolerance, setTolerance] = useState(18);
   const [model, setModel] = useState<"isnet" | "isnet_quint8">("isnet_quint8");
   const [edgeMode, setEdgeMode] = useState<CutoutEdgeMode>("hard");
   const [threshold, setThreshold] = useState(128);
@@ -47,30 +56,41 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
     setError(null);
     setProgress({ label: t("prepare"), pct: 0 });
     try {
-      // 懒加载背景处理模型（首次会下载约 40MB，之后由浏览器缓存）。
-      const { removeBackground } = await import("@imgly/background-removal");
-      const blob = await removeBackground(inputFile, {
-        model,
-        output: { format: "image/png" },
-        progress: (key, current, total) => {
-          if (runId !== runIdRef.current) return;
-          let label = t("processing");
-          if (key.includes("fetch")) label = t("downloadingModel");
-          else if (key.includes("compute")) label = t("processingBackground");
-          const pct = total > 0 ? Math.round((current / total) * 100) : 0;
-          setProgress({ label, pct: Math.max(1, Math.min(99, pct)) });
-        },
-      });
-      if (runId !== runIdRef.current) return;
-      setProgress({ label: t("cleanEdges"), pct: 99 });
-      const normalized = await normalizeCutoutBlob(inputFile, blob, { mode: edgeMode, threshold });
+      let normalized: Blob;
+      if (method === "pixel") {
+        setProgress({ label: t("samplingBackground"), pct: 12 });
+        const pixelResult = await removePixelBackgroundBlob(inputFile, { scope, tolerance });
+        if (runId !== runIdRef.current) return;
+        setProgress({ label: t("cleanEdges"), pct: 99 });
+        normalized = pixelResult.blob;
+      } else {
+        // 懒加载背景处理模型（首次会下载约 40MB，之后由浏览器缓存）。
+        const { removeBackground } = await import("@imgly/background-removal");
+        const blob = await removeBackground(inputFile, {
+          model,
+          output: { format: "image/png" },
+          progress: (key, current, total) => {
+            if (runId !== runIdRef.current) return;
+            let label = t("processing");
+            if (key.includes("fetch")) label = t("downloadingModel");
+            else if (key.includes("compute")) label = t("processingBackground");
+            const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+            setProgress({ label, pct: Math.max(1, Math.min(99, pct)) });
+          },
+        });
+        if (runId !== runIdRef.current) return;
+        setProgress({ label: t("cleanEdges"), pct: 99 });
+        normalized = await normalizeCutoutBlob(inputFile, blob, { mode: edgeMode, threshold });
+      }
       if (runId !== runIdRef.current) return;
       const base = inputFile.name.replace(/\.[^.]+$/, "") || "pixelpaint";
       const file = new File([normalized], base + "-background.png", { type: "image/png" });
       onResult(file);
       setProgress(null);
       setPhase("done");
-      onNotice?.(t("backgroundDone", { mode: edgeMode === "hard" ? t("hardEdgeShort") : t("softEdgeShort") }));
+      onNotice?.(method === "pixel"
+        ? t("pixelBackgroundDone", { scope: scope === "connected" ? t("connectedBackgroundShort") : t("globalBackgroundShort") })
+        : t("backgroundDone", { mode: edgeMode === "hard" ? t("hardEdgeShort") : t("softEdgeShort") }));
     } catch (err) {
       if (runId !== runIdRef.current) return;
       console.error(err);
@@ -122,51 +142,103 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
       )}
 
       <div className="param-row">
-        <label htmlFor="cutout-model">{t("modelPrecision")}</label>
+        <label htmlFor="cutout-method">{t("backgroundMethod")}</label>
         <select
-          id="cutout-model"
+          id="cutout-method"
           className="num-input"
           style={{ width: "100%" }}
-          value={model}
-          onChange={(e) => setModel(e.target.value as "isnet" | "isnet_quint8")}
+          value={method}
+          onChange={(e) => setMethod(e.target.value as CutoutMethod)}
         >
-          <option value="isnet_quint8">{t("fastModel")}</option>
-          <option value="isnet">{t("preciseModel")}</option>
+          <option value="pixel">{t("pixelMethod")}</option>
+          <option value="ai">{t("aiMethod")}</option>
         </select>
-        <p className="field-hint">{t("modelHint")}</p>
+        <p className="field-hint">{method === "pixel" ? t("pixelMethodHint") : t("aiMethodHint")}</p>
       </div>
 
-      <div className="param-row">
-        <label htmlFor="cutout-edge">{t("edgeProcessing")}</label>
-        <select
-          id="cutout-edge"
-          className="num-input"
-          style={{ width: "100%" }}
-          value={edgeMode}
-          onChange={(e) => setEdgeMode(e.target.value as CutoutEdgeMode)}
-        >
-          <option value="hard">{t("hardEdge")}</option>
-          <option value="soft">{t("softEdge")}</option>
-        </select>
-        <p className="field-hint">{t("edgeHint")}</p>
-      </div>
+      {method === "pixel" ? (
+        <>
+          <div className="param-row">
+            <label htmlFor="cutout-scope">{t("backgroundScope")}</label>
+            <select
+              id="cutout-scope"
+              className="num-input"
+              style={{ width: "100%" }}
+              value={scope}
+              onChange={(e) => setScope(e.target.value as PixelCutoutScope)}
+            >
+              <option value="connected">{t("connectedBackground")}</option>
+              <option value="global">{t("globalBackground")}</option>
+            </select>
+            <p className="field-hint">{t("scopeHint")}</p>
+          </div>
 
-      {edgeMode === "hard" && (
-        <div className="param-row">
-          <label htmlFor="cutout-threshold">
-            {t("hardThreshold")} <span className="range-val">{threshold}</span>
-          </label>
-          <input
-            id="cutout-threshold"
-            type="range"
-            min="32"
-            max="224"
-            step="1"
-            value={threshold}
-            onChange={(e) => setThreshold(Number(e.target.value))}
-          />
-          <p className="field-hint">{t("thresholdHint")}</p>
-        </div>
+          <div className="param-row">
+            <label htmlFor="cutout-tolerance">
+              {t("colorTolerance")} <span className="range-val">{tolerance}</span>
+            </label>
+            <input
+              id="cutout-tolerance"
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={tolerance}
+              onChange={(e) => setTolerance(Number(e.target.value))}
+            />
+            <p className="field-hint">{t("toleranceHint")}</p>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="param-row">
+            <label htmlFor="cutout-model">{t("modelPrecision")}</label>
+            <select
+              id="cutout-model"
+              className="num-input"
+              style={{ width: "100%" }}
+              value={model}
+              onChange={(e) => setModel(e.target.value as "isnet" | "isnet_quint8")}
+            >
+              <option value="isnet_quint8">{t("fastModel")}</option>
+              <option value="isnet">{t("preciseModel")}</option>
+            </select>
+            <p className="field-hint">{t("modelHint")}</p>
+          </div>
+
+          <div className="param-row">
+            <label htmlFor="cutout-edge">{t("edgeProcessing")}</label>
+            <select
+              id="cutout-edge"
+              className="num-input"
+              style={{ width: "100%" }}
+              value={edgeMode}
+              onChange={(e) => setEdgeMode(e.target.value as CutoutEdgeMode)}
+            >
+              <option value="hard">{t("hardEdge")}</option>
+              <option value="soft">{t("softEdge")}</option>
+            </select>
+            <p className="field-hint">{t("edgeHint")}</p>
+          </div>
+
+          {edgeMode === "hard" && (
+            <div className="param-row">
+              <label htmlFor="cutout-threshold">
+                {t("hardThreshold")} <span className="range-val">{threshold}</span>
+              </label>
+              <input
+                id="cutout-threshold"
+                type="range"
+                min="32"
+                max="224"
+                step="1"
+                value={threshold}
+                onChange={(e) => setThreshold(Number(e.target.value))}
+              />
+              <p className="field-hint">{t("thresholdHint")}</p>
+            </div>
+          )}
+        </>
       )}
 
       {phase === "running" && progress && (
@@ -184,7 +256,7 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
         disabled={!inputFile || phase === "running"}
         onClick={run}
       >
-        {phase === "running" ? t("processing") : t("startBackground")}
+        {phase === "running" ? t("processing") : method === "pixel" ? t("startPixelBackground") : t("startBackground")}
       </button>
 
       {phase === "done" && resultFile && (
