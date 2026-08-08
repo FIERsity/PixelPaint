@@ -361,6 +361,8 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
 
 .size-row { display: flex; gap: 8px; align-items: center; }
 .size-row .num-input { width: 68px; }
+.canvas-resize-actions { flex-wrap: wrap; }
+.canvas-resize-actions > .btn-ghost { white-space: nowrap; }
 .canvas-tools-card .size-row { margin-bottom: 12px; }
 .canvas-tools-card .size-row:last-child { margin-bottom: 0; }
 
