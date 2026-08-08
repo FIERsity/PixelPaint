@@ -1201,7 +1201,6 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
               </div>
             ))}
           </div>
-          {paletteEditable && palette.colors.length > 1 && <p className="palette-drag-hint">{t("paletteDragHint")}</p>}
           <div className="color-row">
             <input
               type="color"

@@ -240,7 +240,7 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
   .tool-divider { display: none; }
   .tool-panel-field { flex: 1; min-width: 104px; margin-top: 0; }
   .canvas-stage { max-height: 56dvh; padding: 12px; }
-  .side-panels { gap: 12px; }
+  .side-panels { gap: 8px; }
 }
 
 @media (max-width: 560px) {
@@ -322,7 +322,8 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
   gap: 5px;
 }
 
-.side-panels { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.side-panels { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.side-panels > .card:not(:first-child) { margin-top: 0; }
 .panel-head {
   display: flex; justify-content: space-between; align-items: center;
   margin-bottom: 10px; gap: 8px;
@@ -660,5 +661,5 @@ main { flex: 1; padding-bottom: 20px; }
   .tool-divider { display: none; }
   .tool-panel-field { flex: 1; min-width: 104px; margin-top: 0; }
   .canvas-stage { max-height: 56dvh; padding: 12px; }
-  .side-panels { gap: 12px; }
+  .side-panels { gap: 8px; }
 }
