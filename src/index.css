@@ -264,6 +264,10 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
   .source-card-copy { justify-content: flex-start; }
   .preview-box { min-height: 240px; padding: 10px; }
   .output-size-row .num-input { width: 72px; }
+  .selection-context { gap: 5px; padding: 6px; }
+  .selection-quick-actions, .move-session-actions { width: 100%; margin-left: 0; }
+  .selection-quick-actions { justify-content: flex-end; }
+  .move-ready-actions { min-width: 100%; }
 }
 
 .tool-panel { padding: 12px; display: flex; flex-direction: column; gap: 6px; }
@@ -283,6 +287,36 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
   font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 5px;
   cursor: pointer; user-select: none;
 }
+.selection-context {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 7px;
+  margin: -2px 0 12px; padding: 7px;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--bg);
+}
+.selection-segment {
+  display: inline-flex; align-items: center; padding: 2px; gap: 2px;
+  border: 1px solid var(--border); border-radius: 7px; background: var(--card);
+}
+.selection-segment button {
+  min-height: 26px; padding: 4px 8px; border: none; border-radius: 5px;
+  background: transparent; color: var(--muted); font: inherit; font-size: 11px; cursor: pointer;
+}
+.selection-segment button:hover { color: var(--primary-dark); background: var(--primary-soft); }
+.selection-segment button.active { color: #fff; background: var(--primary); }
+.selection-mode-segment button { min-width: 28px; padding-inline: 6px; font-size: 15px; line-height: 1; }
+.selection-count, .move-offset {
+  color: var(--muted); font-family: var(--mono); font-size: 11px; white-space: nowrap;
+}
+.selection-quick-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; margin-left: auto; }
+.selection-quick-actions .mini-btn { min-height: 26px; padding: 4px 6px; white-space: nowrap; }
+.selection-context-hint { flex: 1; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.move-ready-actions { display: flex; align-items: center; flex: 1; gap: 7px; min-width: 180px; }
+.move-ready-actions .mini-btn { min-height: 26px; padding: 4px 6px; white-space: nowrap; }
+.move-session-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.move-session-actions .btn-primary, .move-session-actions .btn-ghost { padding: 5px 10px; font-size: 12px; }
+.move-clipped { color: var(--amber); font-size: 11px; }
+.canvas-input.canvas-tool-select { cursor: crosshair; }
+.canvas-input.canvas-tool-move { cursor: grab; }
+.canvas-input.canvas-tool-move:active { cursor: grabbing; }
 .canvas-stage {
   display: flex; justify-content: center; align-items: flex-start;
   padding: 20px; border-radius: 10px; min-height: 320px; max-height: 68dvh; overflow: auto;
@@ -458,6 +492,7 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
   font-size: 13px; padding: 0 3px; line-height: 1;
 }
 .mini-btn:hover { color: var(--primary); }
+.mini-btn:disabled { color: var(--border-strong); cursor: not-allowed; }
 .mini-btn.danger:hover { color: var(--red); }
 
 .size-row { display: flex; gap: 8px; align-items: center; }

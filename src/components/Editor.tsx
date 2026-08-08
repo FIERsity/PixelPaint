@@ -26,6 +26,8 @@ import { Trash } from "./icons/trash";
 import { Download } from "./icons/download";
 import { Upload } from "./icons/upload";
 import { Line } from "./icons/line";
+import { Selection } from "./icons/selection";
+import { Move } from "./icons/move";
 import PixelIcon from "../lib/PixelIcon";
 import type { PxlKitData } from "../lib/pixelTypes";
 import { checkerStyle } from "../lib/checker";
@@ -33,6 +35,17 @@ import { useI18n } from "../lib/i18n";
 import { encodeGif } from "../lib/gif";
 import { analyzePixelArt } from "../lib/pixelArt";
 import { matchSquareSizePreset, SIZE_PRESET_VALUES, type SizePreset } from "../lib/sizePresets";
+import {
+  combineSelectionMasks,
+  countSelected,
+  createSelectionMask,
+  maskFromPoints,
+  movePixelsBySelection,
+  rectangleSelectionMask,
+  selectionMasksEqual,
+  shiftSelectionMask,
+  type SelectionMode,
+} from "../lib/selection";
 
 export interface AnimationProps {
   frames: PixelDoc[];
@@ -78,9 +91,53 @@ const TOOLS: Array<{ id: Tool; labelKey: string; icon: PxlKitData; key: string }
   { id: "picker", labelKey: "picker", icon: Eyedropper, key: "I" },
   { id: "fill", labelKey: "fill", icon: PaintBucket, key: "G" },
   { id: "line", labelKey: "line", icon: Line, key: "L" },
+  { id: "select", labelKey: "selectionTool", icon: Selection, key: "M" },
+  { id: "move", labelKey: "moveTool", icon: Move, key: "V" },
 ];
 
 const TRANSPARENT: Rgba = [0, 0, 0, 0];
+
+type SelectionShape = "rectangle" | "paint";
+
+interface SelectionGesture {
+  before: Uint8Array;
+  gesture: Uint8Array;
+  mode: SelectionMode;
+  x: number;
+  y: number;
+  lastX: number;
+  lastY: number;
+}
+
+interface MoveSession {
+  layerId: string;
+  beforePixels: Uint8ClampedArray;
+  mask: Uint8Array;
+  previewCanvas: HTMLCanvasElement;
+  dx: number;
+  dy: number;
+  clippedOpaque: number;
+}
+
+interface CanvasDrag {
+  drawing: boolean;
+  tool: Tool;
+  x: number;
+  y: number;
+  lastX: number;
+  lastY: number;
+  moveStartDx: number;
+  moveStartDy: number;
+}
+
+function pixelsToCanvas(pixels: Uint8ClampedArray, width: number, height: number): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (ctx) ctx.putImageData(new ImageData(pixels.slice(), width, height), 0, 0);
+  return canvas;
+}
 
 // 单帧缩略图：把帧的合成结果画到小画布
 function FrameThumb({ frame, active, index, onClick }: {
@@ -147,7 +204,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const paletteManageRef = useRef<HTMLDivElement>(null);
   const paletteImportButtonRef = useRef<HTMLButtonElement>(null);
   const addedColorTimerRef = useRef<number | null>(null);
-  const [, setVersion] = useState(0);
+  const [renderVersion, setVersion] = useState(0);
   const refresh = () => setVersion((v) => v + 1);
 
   const [tool, setTool] = useState<Tool>("pencil");
@@ -175,11 +232,16 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const [showGrid, setShowGrid] = useState(true);
   const [activeLayer, setActiveLayer] = useState(0);
   const [brushSize, setBrushSize] = useState(1);
+  const [selectionShape, setSelectionShape] = useState<SelectionShape>("rectangle");
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>("replace");
   const [sizeW, setSizeW] = useState(doc.width);
   const [sizeH, setSizeH] = useState(doc.height);
   const [canvasSizePreset, setCanvasSizePreset] = useState<SizePreset>(() => matchSquareSizePreset(doc.width, doc.height));
   const [exportScale, setExportScale] = useState(4);
   const [imageImportBusy, setImageImportBusy] = useState(false);
+  const selectionRef = useRef<Uint8Array>(createSelectionMask(doc.width, doc.height));
+  const selectionGestureRef = useRef<SelectionGesture | null>(null);
+  const moveSessionRef = useRef<MoveSession | null>(null);
 
   const askConfirm = useCallback((message: string) => onConfirm(message), [onConfirm]);
 
@@ -453,7 +515,16 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     onNotice?.(t("paletteExported", { format: extension.toUpperCase() }));
   };
 
-  const drag = useRef({ drawing: false, tool: "pencil" as Tool, x: 0, y: 0, lastX: 0, lastY: 0 });
+  const drag = useRef<CanvasDrag>({
+    drawing: false,
+    tool: "pencil",
+    x: 0,
+    y: 0,
+    lastX: 0,
+    lastY: 0,
+    moveStartDx: 0,
+    moveStartDy: 0,
+  });
 
   // 外部替换文档（换帧/导入）时清空撤销历史
   const prevEpoch = useRef(epoch);
@@ -462,8 +533,14 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       prevEpoch.current = epoch;
       historyRef.current.reset();
       recorderRef.current = null;
+      selectionGestureRef.current = null;
+      moveSessionRef.current = null;
+      if (selectionRef.current.length !== doc.width * doc.height) {
+        selectionRef.current = createSelectionMask(doc.width, doc.height);
+      }
+      refresh();
     }
-  }, [epoch]);
+  }, [epoch, doc.width, doc.height]);
 
   // activeLayer 始终有效
   const layerIndex = Math.min(activeLayer, doc.layers.length - 1);
@@ -476,6 +553,12 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     setSizeW(doc.width);
     setSizeH(doc.height);
     setCanvasSizePreset(matchSquareSizePreset(doc.width, doc.height));
+    if (selectionRef.current.length !== doc.width * doc.height) {
+      selectionRef.current = createSelectionMask(doc.width, doc.height);
+      selectionGestureRef.current = null;
+      moveSessionRef.current = null;
+      refresh();
+    }
   }, [doc.width, doc.height]);
 
   // ---------- 渲染：逐图层离屏画布 + GPU 合成（不再每帧全量 CPU 混合） ----------
@@ -548,24 +631,61 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       const l = doc.layers[i];
       if (!l.visible || l.opacity <= 0) continue;
       ctx.globalAlpha = l.opacity;
-      ctx.drawImage(lcs[i].canvas, 0, 0);
+      const moving = moveSessionRef.current;
+      if (moving?.layerId === l.id) {
+        ctx.drawImage(moving.previewCanvas, 0, 0);
+      } else {
+        ctx.drawImage(lcs[i].canvas, 0, 0);
+      }
     }
     ctx.globalAlpha = 1;
   }, [doc, rebuildLayerCanvases, onionPixels]);
 
   useEffect(() => { draw(); }, [draw]);
 
-  const clearOverlay = useCallback(() => {
+  const renderOverlay = useCallback((preview: Array<[number, number]> = [], erasing = false) => {
     const o = overlayRef.current;
     if (!o) return;
     if (o.width !== doc.width || o.height !== doc.height) {
       o.width = doc.width;
       o.height = doc.height;
     }
-    o.getContext("2d")?.clearRect(0, 0, o.width, o.height);
-  }, [doc.width, doc.height]);
+    const ctx = o.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, o.width, o.height);
+    const moving = moveSessionRef.current;
+    const mask = moving
+      ? shiftSelectionMask(moving.mask, doc.width, doc.height, moving.dx, moving.dy)
+      : selectionRef.current;
+    const img = ctx.createImageData(o.width, o.height);
+    const selectionAlpha = tool === "select" ? 52 : tool === "move" ? 42 : 26;
+    for (let index = 0; index < mask.length; index++) {
+      if (mask[index] === 0) continue;
+      const i = index * 4;
+      img.data[i] = 75;
+      img.data[i + 1] = 95;
+      img.data[i + 2] = 199;
+      img.data[i + 3] = selectionAlpha;
+    }
+    const rgb = parseHex(color) ?? [0, 0, 0];
+    for (const [x, y] of preview) {
+      const i = (y * o.width + x) * 4;
+      if (erasing) {
+        img.data[i] = 220;
+        img.data[i + 1] = 60;
+        img.data[i + 2] = 60;
+        img.data[i + 3] = 150;
+      } else {
+        img.data[i] = rgb[0];
+        img.data[i + 1] = rgb[1];
+        img.data[i + 2] = rgb[2];
+        img.data[i + 3] = 235;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }, [color, doc.width, doc.height, tool]);
 
-  useEffect(() => { clearOverlay(); }, [clearOverlay]);
+  useEffect(() => { renderOverlay(); }, [renderOverlay, renderVersion]);
 
   // ---------- 工具落点计算（预览与落笔共用，保证完全一致） ----------
   const expand = useCallback((base: Array<[number, number]>): Array<[number, number]> => {
@@ -590,29 +710,19 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     expand(drawLinePoints(x0, y0, x1, y1))
   ), [expand]);
 
+  const selectionCount = countSelected(selectionRef.current);
+  const selectionActive = selectionCount > 0;
+
+  const constrainPoints = useCallback((pts: Array<[number, number]>) => {
+    if (!selectionActive) return pts;
+    const mask = selectionRef.current;
+    return pts.filter(([x, y]) => mask[y * doc.width + x] !== 0);
+  }, [doc.width, selectionActive]);
+
   // 预览：把「将要落下的确切像素」画到叠加层
   const showPreview = useCallback((pts: Array<[number, number]>, erasing: boolean) => {
-    const o = overlayRef.current;
-    if (!o) return;
-    if (o.width !== doc.width || o.height !== doc.height) {
-      o.width = doc.width;
-      o.height = doc.height;
-    }
-    const ctx = o.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, o.width, o.height);
-    const rgb = parseHex(color) ?? [0, 0, 0];
-    const img = ctx.createImageData(o.width, o.height);
-    for (const [x, y] of pts) {
-      const i = (y * o.width + x) * 4;
-      if (erasing) {
-        img.data[i] = 220; img.data[i + 1] = 60; img.data[i + 2] = 60; img.data[i + 3] = 150;
-      } else {
-        img.data[i] = rgb[0]; img.data[i + 1] = rgb[1]; img.data[i + 2] = rgb[2]; img.data[i + 3] = 235;
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-  }, [color, doc.width, doc.height]);
+    renderOverlay(constrainPoints(pts), erasing);
+  }, [constrainPoints, renderOverlay]);
 
   // ---------- 写入 ----------
   const currentRgba = useCallback((): Rgba => {
@@ -627,17 +737,239 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     const rec = recorderRef.current;
     for (const [x, y] of pts) {
       const idx = y * doc.width + x;
+      if (selectionActive && selectionRef.current[idx] === 0) continue;
       const i = idx * 4;
       const before: Rgba = [layer.pixels[i], layer.pixels[i + 1], layer.pixels[i + 2], layer.pixels[i + 3]];
       putPixel(layer.pixels, doc.width, x, y, rgba[0], rgba[1], rgba[2], rgba[3]);
       rec?.touch(idx, before, rgba);
     }
-  }, [doc, layerIndex]);
+  }, [doc, layerIndex, selectionActive]);
 
   // 提交结构变化（触发重渲染 + 上层自动保存）
   const commit = useCallback(() => {
     setDoc({ ...doc, layers: [...doc.layers] });
   }, [doc, setDoc]);
+
+  // ---------- 像素选区 ----------
+  const pushSelectionHistory = (before: Uint8Array, after: Uint8Array) => {
+    if (selectionMasksEqual(before, after)) return;
+    historyRef.current.push({ kind: "selection", before: before.slice(), after: after.slice() });
+  };
+
+  const applySelectionMask = (next: Uint8Array, record = true) => {
+    const before = selectionRef.current;
+    if (record) pushSelectionHistory(before, next);
+    selectionRef.current = next;
+    renderOverlay();
+    refresh();
+  };
+
+  const selectAllPixels = () => {
+    const next = createSelectionMask(doc.width, doc.height);
+    next.fill(1);
+    applySelectionMask(next);
+  };
+
+  const invertSelection = () => {
+    const next = selectionRef.current.slice();
+    for (let i = 0; i < next.length; i++) next[i] = next[i] === 0 ? 1 : 0;
+    applySelectionMask(next);
+  };
+
+  const clearSelection = () => {
+    if (!selectionActive) return;
+    applySelectionMask(createSelectionMask(doc.width, doc.height));
+  };
+
+  const selectionModeForPointer = (e: React.PointerEvent<HTMLCanvasElement>): SelectionMode => {
+    if (e.shiftKey && e.altKey) return "intersect";
+    if (e.shiftKey) return "add";
+    if (e.altKey) return "subtract";
+    return selectionMode;
+  };
+
+  const updateSelectionGesture = (x: number, y: number) => {
+    const gesture = selectionGestureRef.current;
+    if (!gesture) return;
+    if (selectionShape === "rectangle") {
+      gesture.gesture = rectangleSelectionMask(doc.width, doc.height, gesture.x, gesture.y, x, y);
+    } else {
+      const path = drawLinePoints(gesture.lastX, gesture.lastY, x, y);
+      const stroke = maskFromPoints(doc.width, doc.height, expand(path));
+      for (let i = 0; i < stroke.length; i++) {
+        if (stroke[i] !== 0) gesture.gesture[i] = 1;
+      }
+      gesture.lastX = x;
+      gesture.lastY = y;
+    }
+    selectionRef.current = combineSelectionMasks(gesture.before, gesture.gesture, gesture.mode);
+    renderOverlay();
+  };
+
+  const beginSelectionGesture = (x: number, y: number, e: React.PointerEvent<HTMLCanvasElement>) => {
+    selectionGestureRef.current = {
+      before: selectionRef.current.slice(),
+      gesture: createSelectionMask(doc.width, doc.height),
+      mode: selectionModeForPointer(e),
+      x,
+      y,
+      lastX: x,
+      lastY: y,
+    };
+    updateSelectionGesture(x, y);
+    refresh();
+  };
+
+  const finishSelectionGesture = () => {
+    const gesture = selectionGestureRef.current;
+    if (!gesture) return;
+    selectionGestureRef.current = null;
+    pushSelectionHistory(gesture.before, selectionRef.current);
+    renderOverlay();
+    refresh();
+  };
+
+  const cancelSelectionGesture = () => {
+    const gesture = selectionGestureRef.current;
+    if (!gesture) return;
+    selectionRef.current = gesture.before;
+    selectionGestureRef.current = null;
+    renderOverlay();
+    refresh();
+  };
+
+  const deleteSelectedPixels = () => {
+    if (!selectionActive || moveSessionRef.current) return;
+    const layer = doc.layers[layerIndex];
+    if (!layer) return;
+    const rec = new StrokeRecorder(layer.id);
+    for (let index = 0; index < selectionRef.current.length; index++) {
+      if (selectionRef.current[index] === 0) continue;
+      const i = index * 4;
+      const before: Rgba = [layer.pixels[i], layer.pixels[i + 1], layer.pixels[i + 2], layer.pixels[i + 3]];
+      if (before[3] === 0) continue;
+      layer.pixels[i] = 0;
+      layer.pixels[i + 1] = 0;
+      layer.pixels[i + 2] = 0;
+      layer.pixels[i + 3] = 0;
+      rec.touch(index, before, TRANSPARENT);
+    }
+    const entry = rec.entry();
+    if (!entry) return;
+    historyRef.current.push(entry);
+    syncLayerCanvas(layerIndex);
+    draw();
+    commit();
+    refresh();
+  };
+
+  // ---------- 移动选中像素（预览阶段不修改文档） ----------
+  const createMoveSession = (): MoveSession | null => {
+    if (!selectionActive) return null;
+    const layer = doc.layers[layerIndex];
+    if (!layer) return null;
+    const beforePixels = layer.pixels.slice();
+    const session: MoveSession = {
+      layerId: layer.id,
+      beforePixels,
+      mask: selectionRef.current.slice(),
+      previewCanvas: pixelsToCanvas(beforePixels, doc.width, doc.height),
+      dx: 0,
+      dy: 0,
+      clippedOpaque: 0,
+    };
+    moveSessionRef.current = session;
+    draw();
+    renderOverlay();
+    refresh();
+    return session;
+  };
+
+  const updateMoveOffset = (dx: number, dy: number) => {
+    const session = moveSessionRef.current;
+    if (!session) return;
+    session.dx = Math.round(dx);
+    session.dy = Math.round(dy);
+    const result = movePixelsBySelection(
+      session.beforePixels,
+      session.mask,
+      doc.width,
+      doc.height,
+      session.dx,
+      session.dy,
+    );
+    session.clippedOpaque = result.clippedOpaque;
+    const ctx = session.previewCanvas.getContext("2d");
+    ctx?.putImageData(new ImageData(result.pixels.slice(), doc.width, doc.height), 0, 0);
+    draw();
+    renderOverlay();
+    refresh();
+  };
+
+  const cancelMove = useCallback(() => {
+    if (!moveSessionRef.current) return;
+    moveSessionRef.current = null;
+    draw();
+    renderOverlay();
+    refresh();
+  }, [draw, renderOverlay]);
+
+  const placeMove = useCallback(() => {
+    const session = moveSessionRef.current;
+    if (!session) return;
+    const index = doc.layers.findIndex((layer) => layer.id === session.layerId);
+    const layer = doc.layers[index];
+    if (!layer) {
+      moveSessionRef.current = null;
+      renderOverlay();
+      refresh();
+      return;
+    }
+    const result = movePixelsBySelection(
+      session.beforePixels,
+      session.mask,
+      doc.width,
+      doc.height,
+      session.dx,
+      session.dy,
+    );
+    const rec = new StrokeRecorder(layer.id);
+    for (let pixel = 0; pixel < result.pixels.length / 4; pixel++) {
+      const i = pixel * 4;
+      const before: Rgba = [session.beforePixels[i], session.beforePixels[i + 1], session.beforePixels[i + 2], session.beforePixels[i + 3]];
+      const after: Rgba = [result.pixels[i], result.pixels[i + 1], result.pixels[i + 2], result.pixels[i + 3]];
+      if (before[0] === after[0] && before[1] === after[1] && before[2] === after[2] && before[3] === after[3]) continue;
+      rec.touch(pixel, before, after);
+    }
+    const entry = rec.entry();
+    if (entry?.kind === "pixels") {
+      historyRef.current.push({
+        ...entry,
+        selectionBefore: session.mask.slice(),
+        selectionAfter: result.mask.slice(),
+      });
+    } else if (!selectionMasksEqual(session.mask, result.mask)) {
+      historyRef.current.push({ kind: "selection", before: session.mask.slice(), after: result.mask.slice() });
+    }
+    layer.pixels.set(result.pixels);
+    selectionRef.current = result.mask;
+    moveSessionRef.current = null;
+    syncLayerCanvas(index);
+    draw();
+    renderOverlay();
+    if (entry) setDoc({ ...doc, layers: [...doc.layers] });
+    if (result.clippedOpaque > 0) onNotice?.(t("moveClippedNotice", { count: result.clippedOpaque }));
+    refresh();
+  }, [doc, draw, onNotice, renderOverlay, setDoc, syncLayerCanvas, t]);
+
+  const nudgeMove = (dx: number, dy: number) => {
+    const session = moveSessionRef.current ?? createMoveSession();
+    if (!session) {
+      onNotice?.(t("moveNeedsSelection"));
+      return;
+    }
+    updateMoveOffset(session.dx + dx, session.dy + dy);
+  };
 
   // ---------- 指针事件 ----------
   const toPixel = (e: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
@@ -661,6 +993,11 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     }
     const [x, y] = toPixel(e);
 
+    if (moveSessionRef.current && tool !== "move") {
+      onNotice?.(t("moveFinishFirst"));
+      return;
+    }
+
     // 取色：透明处不改色
     if (tool === "picker") {
       const img = composite(doc);
@@ -675,7 +1012,33 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       return;
     }
 
-    drag.current = { drawing: true, tool, x, y, lastX: x, lastY: y };
+    drag.current = {
+      drawing: true,
+      tool,
+      x,
+      y,
+      lastX: x,
+      lastY: y,
+      moveStartDx: moveSessionRef.current?.dx ?? 0,
+      moveStartDy: moveSessionRef.current?.dy ?? 0,
+    };
+
+    if (tool === "select") {
+      beginSelectionGesture(x, y, e);
+      return;
+    }
+
+    if (tool === "move") {
+      const session = moveSessionRef.current ?? createMoveSession();
+      if (!session) {
+        drag.current.drawing = false;
+        onNotice?.(t("moveNeedsSelection"));
+        return;
+      }
+      drag.current.moveStartDx = session.dx;
+      drag.current.moveStartDy = session.dy;
+      return;
+    }
 
     // 填充：一次性操作，立即完成并入历史
     if (tool === "fill") {
@@ -725,6 +1088,16 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       draw();
     } else if (t === "line") {
       showPreview(shapePoints(drag.current.x, drag.current.y, x, y), false);
+    } else if (t === "select") {
+      updateSelectionGesture(x, y);
+    } else if (t === "move") {
+      let dx = drag.current.moveStartDx + x - drag.current.x;
+      let dy = drag.current.moveStartDy + y - drag.current.y;
+      if (e.shiftKey) {
+        if (Math.abs(dx - drag.current.moveStartDx) >= Math.abs(dy - drag.current.moveStartDy)) dy = drag.current.moveStartDy;
+        else dx = drag.current.moveStartDx;
+      }
+      updateMoveOffset(dx, dy);
     }
   };
 
@@ -742,9 +1115,18 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     const [x, y] = toPixel(e);
     const t = drag.current.tool;
 
+    if (t === "select") {
+      updateSelectionGesture(x, y);
+      finishSelectionGesture();
+      return;
+    }
+    if (t === "move") {
+      refresh();
+      return;
+    }
     if (t === "line") {
       applyPoints(shapePoints(drag.current.x, drag.current.y, x, y), currentRgba());
-      clearOverlay();
+      renderOverlay();
       syncLayerCanvas(layerIndex);
       draw();
     }
@@ -758,7 +1140,15 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     if (!drag.current.drawing) return;
     const t = drag.current.tool;
     drag.current.drawing = false;
-    clearOverlay();
+    if (t === "select") {
+      cancelSelectionGesture();
+      return;
+    }
+    if (t === "move") {
+      refresh();
+      return;
+    }
+    renderOverlay();
     if (t === "line") {
       recorderRef.current = null; // 未落笔，不留历史
       refresh();
@@ -771,15 +1161,24 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
 
   // ---------- 历史（增量像素条目 + 结构性文档条目） ----------
   const undo = useCallback(() => {
+    if (moveSessionRef.current) {
+      cancelMove();
+      return;
+    }
     const entry = historyRef.current.popUndo();
     if (!entry) return;
     if (entry.kind === "pixels") {
       applyPixelChanges(doc, entry.layerId, entry.changes, "before");
+      if (entry.selectionBefore) selectionRef.current = entry.selectionBefore.slice();
       historyRef.current.pushRedo(entry);
       const idx = doc.layers.findIndex((l) => l.id === entry.layerId);
       if (idx >= 0) syncLayerCanvas(idx);
       draw();
       setDoc({ ...doc, layers: [...doc.layers] });
+    } else if (entry.kind === "selection") {
+      selectionRef.current = entry.before.slice();
+      historyRef.current.pushRedo(entry);
+      renderOverlay();
     } else {
       historyRef.current.pushRedo({ kind: "doc", doc: cloneDoc(doc) });
       rebuildLayerCanvases(entry.doc);
@@ -787,26 +1186,32 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     }
     setActiveLayer((i) => Math.min(i, doc.layers.length - 1));
     refresh();
-  }, [doc, setDoc, syncLayerCanvas, draw, rebuildLayerCanvases]);
+  }, [cancelMove, doc, setDoc, syncLayerCanvas, draw, rebuildLayerCanvases, renderOverlay]);
 
   const redo = useCallback(() => {
+    if (moveSessionRef.current) return;
     const entry = historyRef.current.popRedo();
     if (!entry) return;
     if (entry.kind === "pixels") {
       applyPixelChanges(doc, entry.layerId, entry.changes, "after");
-      historyRef.current.push(entry);
+      if (entry.selectionAfter) selectionRef.current = entry.selectionAfter.slice();
+      historyRef.current.restore(entry);
       const idx = doc.layers.findIndex((l) => l.id === entry.layerId);
       if (idx >= 0) syncLayerCanvas(idx);
       draw();
       setDoc({ ...doc, layers: [...doc.layers] });
+    } else if (entry.kind === "selection") {
+      selectionRef.current = entry.after.slice();
+      historyRef.current.restore(entry);
+      renderOverlay();
     } else {
-      historyRef.current.push({ kind: "doc", doc: cloneDoc(doc) });
+      historyRef.current.restore({ kind: "doc", doc: cloneDoc(doc) });
       rebuildLayerCanvases(entry.doc);
       setDoc(entry.doc);
     }
     setActiveLayer((i) => Math.min(i, doc.layers.length - 1));
     refresh();
-  }, [doc, setDoc, syncLayerCanvas, draw, rebuildLayerCanvases]);
+  }, [doc, setDoc, syncLayerCanvas, draw, rebuildLayerCanvases, renderOverlay]);
 
   // ---------- 图层（全部入历史） ----------
   const withHistory = (fn: () => void) => {
@@ -1006,12 +1411,24 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     await onOpenProject?.(file);
   };
 
+  const chooseTool = useCallback((next: Tool) => {
+    if (moveSessionRef.current && next !== "move") {
+      onNotice?.(t("moveFinishFirst"));
+      return;
+    }
+    setTool(next);
+  }, [onNotice, t]);
+
   // ---------- 键盘快捷键 ----------
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
       const mod = e.ctrlKey || e.metaKey;
+
+      if (mod && e.key.toLowerCase() === "a") { e.preventDefault(); selectAllPixels(); return; }
+      if (mod && e.key.toLowerCase() === "d") { e.preventDefault(); clearSelection(); return; }
+      if (mod && e.key.toLowerCase() === "i") { e.preventDefault(); invertSelection(); return; }
 
       if (mod && e.key.toLowerCase() === "z") {
         e.preventDefault();
@@ -1025,7 +1442,29 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
 
       const k = e.key.toLowerCase();
       const hit = TOOLS.find((t) => t.key.toLowerCase() === k);
-      if (hit) { setTool(hit.id); return; }
+      if (hit) { chooseTool(hit.id); return; }
+      if (e.key === "Enter" && moveSessionRef.current) { e.preventDefault(); placeMove(); return; }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (selectionGestureRef.current) cancelSelectionGesture();
+        else if (moveSessionRef.current) cancelMove();
+        else clearSelection();
+        return;
+      }
+      if ((e.key === "Delete" || e.key === "Backspace") && selectionActive) {
+        e.preventDefault();
+        deleteSelectedPixels();
+        return;
+      }
+      if (tool === "move" && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+        e.preventDefault();
+        const step = e.shiftKey ? 8 : 1;
+        if (e.key === "ArrowLeft") nudgeMove(-step, 0);
+        if (e.key === "ArrowRight") nudgeMove(step, 0);
+        if (e.key === "ArrowUp") nudgeMove(0, -step);
+        if (e.key === "ArrowDown") nudgeMove(0, step);
+        return;
+      }
       if (k === "[") { setBrushSize((s) => Math.max(1, s - 1)); return; }
       if (k === "]") { setBrushSize((s) => Math.min(5, s + 1)); return; }
       if (k === "+" || k === "=") {
@@ -1045,13 +1484,14 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, saveProject, exportPng, animation]);
+  });
 
   const gridVisible = showGrid && zoom >= 4;
   const cell = zoom;
   const canvasChecker = checkerStyle(cell);
   const canUndo = historyRef.current.canUndo;
   const canRedo = historyRef.current.canRedo;
+  const moveSession = moveSessionRef.current;
   const localizeLayerName = (name: string) => {
     const match = name.match(/^(?:图层|Layer)\s+(\d+)$/);
     return match ? t("layerName", { index: Number(match[1]) }) : name;
@@ -1068,7 +1508,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
               key={toolItem.id}
               type="button"
               className={`tool-btn ${tool === toolItem.id ? "active" : ""}`}
-              onClick={() => setTool(toolItem.id)}
+              onClick={() => chooseTool(toolItem.id)}
               title={`${t(toolItem.labelKey)} (${toolItem.key})`}
               aria-label={t(toolItem.labelKey)}
               aria-pressed={tool === toolItem.id}
@@ -1080,12 +1520,14 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
         </div>
 
         <div className="tool-divider" />
-        <div className="tool-panel-field">
-          <label className="field-label" htmlFor="brush-size">{t("brushSize")}</label>
-          <select id="brush-size" className="num-input" style={{ width: "100%" }} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))}>
-            {[1, 2, 3, 4, 5].map((s) => <option key={s} value={s}>{s} px</option>)}
-          </select>
-        </div>
+        {(["pencil", "eraser", "line"].includes(tool) || (tool === "select" && selectionShape === "paint")) && (
+          <div className="tool-panel-field">
+            <label className="field-label" htmlFor="brush-size">{tool === "select" ? t("selectionBrushSize") : t("brushSize")}</label>
+            <select id="brush-size" className="num-input" style={{ width: "100%" }} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))}>
+              {[1, 2, 3, 4, 5].map((s) => <option key={s} value={s}>{s} px</option>)}
+            </select>
+          </div>
+        )}
         <div className="tool-panel-field">
           <label className="field-label" htmlFor="zoom-level">{t("canvasZoom")}</label>
           <select id="zoom-level" className="num-input" style={{ width: "100%" }} value={zoom} onChange={(e) => setZoom(Number(e.target.value))}>
@@ -1113,6 +1555,54 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
             </button>
           </div>
         </div>
+        {(tool === "select" || tool === "move" || selectionActive) && (
+          <div className="selection-context" role="toolbar" aria-label={t("selectionActions")}>
+            {tool === "select" && (
+              <>
+                <div className="selection-segment" role="group" aria-label={t("selectionMethod")}>
+                  <button type="button" className={selectionShape === "rectangle" ? "active" : ""} onClick={() => setSelectionShape("rectangle")} aria-pressed={selectionShape === "rectangle"}>{t("selectionRectangle")}</button>
+                  <button type="button" className={selectionShape === "paint" ? "active" : ""} onClick={() => setSelectionShape("paint")} aria-pressed={selectionShape === "paint"}>{t("selectionPaint")}</button>
+                </div>
+                <div className="selection-segment selection-mode-segment" role="group" aria-label={t("selectionCombineMode")}>
+                  {(["replace", "add", "subtract", "intersect"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={selectionMode === mode ? "active" : ""}
+                      onClick={() => setSelectionMode(mode)}
+                      aria-pressed={selectionMode === mode}
+                      title={t(`selectionMode${mode[0].toUpperCase()}${mode.slice(1)}`)}
+                    >{mode === "replace" ? "□" : mode === "add" ? "+" : mode === "subtract" ? "−" : "∩"}</button>
+                  ))}
+                </div>
+              </>
+            )}
+            <span className="selection-count">{t("selectionCount", { count: selectionCount })}</span>
+            {tool === "move" && (
+              moveSession ? (
+                <div className="move-session-actions">
+                  <span className="move-offset">{t("moveOffset", { x: moveSession.dx, y: moveSession.dy })}</span>
+                  {moveSession.clippedOpaque > 0 && <span className="move-clipped">{t("moveClipped", { count: moveSession.clippedOpaque })}</span>}
+                  <button type="button" className="btn-primary" onClick={placeMove}>{t("movePlace")}</button>
+                  <button type="button" className="btn-ghost" onClick={cancelMove}>{t("moveCancel")}</button>
+                </div>
+              ) : (
+                <div className="move-ready-actions">
+                  <span className="selection-context-hint">{selectionActive ? t("moveReadyHint") : t("moveNeedsSelection")}</span>
+                  <button type="button" className="mini-btn" onClick={clearSelection} disabled={!selectionActive}>{t("selectionClear")}</button>
+                </div>
+              )
+            )}
+            {tool !== "move" && (
+              <div className="selection-quick-actions">
+                <button type="button" className="mini-btn" onClick={selectAllPixels}>{t("selectionAll")}</button>
+                <button type="button" className="mini-btn" onClick={invertSelection}>{t("selectionInvert")}</button>
+                <button type="button" className="mini-btn" onClick={deleteSelectedPixels} disabled={!selectionActive}>{t("selectionDeletePixels")}</button>
+                <button type="button" className="mini-btn" onClick={clearSelection} disabled={!selectionActive}>{t("selectionClear")}</button>
+              </div>
+            )}
+          </div>
+        )}
         <div className="canvas-stage">
           <div
             className="canvas-wrap checker"
@@ -1120,7 +1610,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
           >
             <canvas
               ref={canvasRef}
-              className="pixelated"
+              className={`pixelated canvas-input canvas-tool-${tool}`}
               style={{ width: doc.width * cell, height: doc.height * cell, touchAction: "none" }}
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}

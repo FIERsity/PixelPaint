@@ -16,7 +16,7 @@ export interface PixelDoc {
   layers: Layer[];
 }
 
-export type Tool = "pencil" | "eraser" | "picker" | "fill" | "line";
+export type Tool = "pencil" | "eraser" | "picker" | "fill" | "line" | "select" | "move";
 
 // 笔刷覆盖的相对偏移（1 = 单像素，n = n×n）
 export function brushOffsets(size: number): Array<[number, number]> {
@@ -221,7 +221,14 @@ export interface PixelChange {
 }
 
 export type UndoEntry =
-  | { kind: "pixels"; layerId: string; changes: PixelChange[] }
+  | {
+      kind: "pixels";
+      layerId: string;
+      changes: PixelChange[];
+      selectionBefore?: Uint8Array;
+      selectionAfter?: Uint8Array;
+    }
+  | { kind: "selection"; before: Uint8Array; after: Uint8Array }
   | { kind: "doc"; doc: PixelDoc };
 
 // 笔画记录器：一边画一边记录每个被改动像素的 before/after
@@ -286,9 +293,14 @@ export class History {
   }
 
   push(entry: UndoEntry) {
+    this.restore(entry);
+    this.redoStack = [];
+  }
+
+  // 重做时把条目放回撤销栈，但保留其余尚未重做的条目
+  restore(entry: UndoEntry) {
     this.undoStack.push(entry);
     if (this.undoStack.length > this.limit) this.undoStack.shift();
-    this.redoStack = [];
   }
 
   // 弹出最近一条撤销（不自动入重做栈，由调用方决定）

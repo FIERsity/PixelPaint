@@ -192,6 +192,24 @@ describe("History（增量像素条目 + 文档条目）", () => {
     expect(h.canRedo).toBe(false);
   });
 
+  it("连续重做时保留尚未恢复的条目", () => {
+    const h = new History(10);
+    const first = { kind: "selection" as const, before: new Uint8Array([0]), after: new Uint8Array([1]) };
+    const second = { kind: "selection" as const, before: new Uint8Array([1]), after: new Uint8Array([0]) };
+    h.push(first);
+    h.push(second);
+    h.pushRedo(h.popUndo()!);
+    h.pushRedo(h.popUndo()!);
+
+    const redoFirst = h.popRedo()!;
+    h.restore(redoFirst);
+    expect(h.canRedo).toBe(true);
+    const redoSecond = h.popRedo()!;
+    h.restore(redoSecond);
+    expect(h.canRedo).toBe(false);
+    expect(h.canUndo).toBe(true);
+  });
+
   it("超出上限后丢弃最旧条目", () => {
     const h = new History(2);
     for (let i = 0; i < 5; i++) {
