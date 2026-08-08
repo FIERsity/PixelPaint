@@ -64,6 +64,13 @@ body {
 
 button { font-family: inherit; }
 
+/* ---------- 原生表单控件 ---------- */
+input[type="checkbox"], input[type="range"] { accent-color: var(--primary); }
+input[type="checkbox"]:focus-visible, input[type="range"]:focus-visible {
+  outline: 2px solid var(--primary-border);
+  outline-offset: 2px;
+}
+
 /* ---------- 布局 ---------- */
 .container { width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 20px; }
 
