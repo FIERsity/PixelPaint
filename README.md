@@ -31,6 +31,12 @@
 
 Vite + React + TypeScript + Tailwind CSS v4 + @imgly/background-removal
 
+## 图标
+
+工具栏 / 操作按钮的像素风图标来自 [Pxlkit](https://pxlkit.xyz)
+（[License: MIT code + Pxlkit Assets License](https://github.com/Joangeldelarosa/pxlkit)）——
+免费使用需署名，已在页面 footer 标注。直线 / 矩形图标为本项目自绘（同格式）。
+
 ## 本地开发
 
 ```bash

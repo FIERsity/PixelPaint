@@ -5,6 +5,17 @@ import {
   type Layer, type MirrorMode, type PixelDoc, type Tool,
 } from "../lib/pixelDoc";
 import { DEFAULT_PALETTE, hexToRgb, PRESET_PALETTES, rgbToHex, type Palette } from "../lib/palette";
+import { Pencil } from "./icons/pencil";
+import { Eraser } from "./icons/eraser";
+import { Eyedropper } from "./icons/eyedropper";
+import { PaintBucket } from "./icons/paint-bucket";
+import { Undo } from "./icons/undo";
+import { Redo } from "./icons/redo";
+import { Trash } from "./icons/trash";
+import { Line } from "./icons/line";
+import { Rect } from "./icons/rect";
+import PixelIcon from "../lib/PixelIcon";
+import type { PxlKitData } from "../lib/pixelTypes";
 
 interface EditorProps {
   doc: PixelDoc;
@@ -13,13 +24,13 @@ interface EditorProps {
 
 const ZOOMS = [1, 2, 4, 8, 16, 32];
 
-const TOOLS: Array<{ id: Tool; label: string; icon: string }> = [
-  { id: "pencil", label: "铅笔", icon: "✏️" },
-  { id: "eraser", label: "橡皮", icon: "◻️" },
-  { id: "picker", label: "取色", icon: "💧" },
-  { id: "fill", label: "填充", icon: "🪣" },
-  { id: "line", label: "直线", icon: "📏" },
-  { id: "rect", label: "矩形", icon: "▭" },
+const TOOLS: Array<{ id: Tool; label: string; icon: PxlKitData }> = [
+  { id: "pencil", label: "铅笔", icon: Pencil },
+  { id: "eraser", label: "橡皮", icon: Eraser },
+  { id: "picker", label: "取色", icon: Eyedropper },
+  { id: "fill", label: "填充", icon: PaintBucket },
+  { id: "line", label: "直线", icon: Line },
+  { id: "rect", label: "矩形", icon: Rect },
 ];
 
 export default function Editor({ doc, setDoc }: EditorProps) {
@@ -300,7 +311,7 @@ export default function Editor({ doc, setDoc }: EditorProps) {
               onClick={() => setTool(t.id)}
               title={t.label}
             >
-              <span aria-hidden="true" style={{ fontSize: 20 }}>{t.icon}</span>
+              <PixelIcon data={t.icon} size={22} />
               <span>{t.label}</span>
             </button>
           ))}
@@ -344,12 +355,16 @@ export default function Editor({ doc, setDoc }: EditorProps) {
               <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />
               网格
             </label>
-            <button type="button" className="btn-ghost" onClick={undo} disabled={!historyRef.current.canUndo} title="撤销">↶</button>
-            <button type="button" className="btn-ghost" onClick={redo} disabled={!historyRef.current.canRedo} title="重做">↷</button>
+            <button type="button" className="btn-ghost" onClick={undo} disabled={!historyRef.current.canUndo} title="撤销" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "6px 8px" }}>
+              <PixelIcon data={Undo} size={16} />
+            </button>
+            <button type="button" className="btn-ghost" onClick={redo} disabled={!historyRef.current.canRedo} title="重做" style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "6px 8px" }}>
+              <PixelIcon data={Redo} size={16} />
+            </button>
           </div>
         </div>
-        <div className="canvas-stage checker">
-          <div className="canvas-wrap" style={{ width: doc.width * cellPx, height: doc.height * cellPx }}>
+        <div className="canvas-stage">
+          <div className="canvas-wrap checker" style={{ width: doc.width * cellPx, height: doc.height * cellPx, backgroundSize: `${cellPx}px ${cellPx}px` }}>
             <canvas
               ref={canvasRef}
               className="pixelated"
@@ -449,7 +464,9 @@ export default function Editor({ doc, setDoc }: EditorProps) {
                 <div className="layer-actions">
                   <button type="button" className="mini-btn" onClick={(e) => { e.stopPropagation(); moveLayer(i, 1); }} title="上移">↑</button>
                   <button type="button" className="mini-btn" onClick={(e) => { e.stopPropagation(); moveLayer(i, -1); }} title="下移">↓</button>
-                  <button type="button" className="mini-btn danger" onClick={(e) => { e.stopPropagation(); removeLayer(i); }} title="删除">✕</button>
+                  <button type="button" className="mini-btn danger" onClick={(e) => { e.stopPropagation(); removeLayer(i); }} title="删除" style={{ display: "inline-flex", alignItems: "center" }}>
+                    <PixelIcon data={Trash} size={13} />
+                  </button>
                 </div>
               </div>
             ))}

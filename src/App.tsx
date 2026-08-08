@@ -75,6 +75,12 @@ export default function App() {
       <footer className="site-footer">
         <div className="container">
           <p>PixelPaint · 在线像素画工作站 · 图片仅在本地浏览器中处理，绝不上传</p>
+          <p style={{ marginTop: 6 }}>
+            Icons by{" "}
+            <a href="https://pxlkit.xyz" target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>
+              Pxlkit
+            </a>
+          </p>
         </div>
       </footer>
     </div>

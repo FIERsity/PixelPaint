@@ -150,6 +150,10 @@ export default function Convert({ onImport }: ConvertProps) {
   };
 
   const chosenPalette: Palette = PRESET_PALETTES.find((p) => p.name === paletteName) ?? NO_PALETTE;
+  // 预览放大：小画布放大到可读尺寸（最长边约 420px），不超过 20×
+  const previewScale = result
+    ? Math.max(1, Math.min(20, Math.floor(420 / Math.max(result.w, result.h))))
+    : 1;
 
   return (
     <div className="convert-layout">
@@ -192,7 +196,16 @@ export default function Convert({ onImport }: ConvertProps) {
           </div>
           {result ? (
             <div className="preview-box checker">
-              <canvas ref={previewRef} className="pixelated" style={{ imageRendering: "pixelated" }} />
+              <canvas
+                ref={previewRef}
+                className="pixelated"
+                style={{
+                  imageRendering: "pixelated",
+                  width: result.w * previewScale,
+                  height: "auto",
+                  aspectRatio: `${result.w} / ${result.h}`,
+                }}
+              />
             </div>
           ) : (
             <div className="preview-box" style={{ color: "var(--muted)", fontSize: 13 }}>上传图片后在此预览像素化结果</div>

@@ -183,7 +183,7 @@ button { font-family: inherit; }
   display: flex; justify-content: center; align-items: flex-start;
   padding: 20px; border-radius: 10px; min-height: 360px; max-height: 70vh; overflow: auto;
 }
-.canvas-wrap { position: relative; box-shadow: 0 0 0 1px var(--border); background: #fff; flex-shrink: 0; }
+.canvas-wrap { position: relative; box-shadow: 0 0 0 1px var(--border); flex-shrink: 0; }
 .canvas-grid {
   position: absolute; inset: 0; pointer-events: none;
   background-image:
