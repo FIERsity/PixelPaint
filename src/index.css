@@ -170,8 +170,9 @@ button { font-family: inherit; }
     linear-gradient(-45deg, #e8ecf3 25%, transparent 25%),
     linear-gradient(45deg, transparent 75%, #e8ecf3 75%),
     linear-gradient(-45deg, transparent 75%, #e8ecf3 75%);
-  background-size: 12px 12px;
-  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+  /* 默认每个小格 8px；画布/像素预览会用内联样式覆盖为实际像素尺寸。 */
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
 }
 
 /* 像素画渲染：最近邻放大 */
@@ -326,6 +327,17 @@ button { font-family: inherit; }
   border: 1px solid var(--border);
 }
 .preview-box img, .preview-box canvas { max-width: 100%; max-height: 60vh; }
+.pixel-preview {
+  flex: 0 0 auto;
+  line-height: 0;
+  overflow: hidden;
+}
+.pixel-preview canvas,
+.pixel-preview img {
+  display: block;
+  max-width: none;
+  max-height: none;
+}
 
 .param-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
 .param-row label { font-size: 13px; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
