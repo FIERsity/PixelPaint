@@ -14,14 +14,13 @@ interface CutoutProps {
   resultFile: File | null;
   onResult: (file: File) => void;
   onImport: (doc: PixelDoc) => void;
-  onReturnToPixel: (file: File) => void;
   onNotice?: (msg: string) => void;
 }
 
 type Phase = "idle" | "ready" | "running" | "done" | "error";
 type CutoutMethod = "pixel" | "ai";
 
-export default function Cutout({ inputFile, resultFile, onResult, onImport, onReturnToPixel, onNotice }: CutoutProps) {
+export default function Cutout({ inputFile, resultFile, onResult, onImport, onNotice }: CutoutProps) {
   const { t } = useI18n();
   const [phase, setPhase] = useState<Phase>(inputFile ? "ready" : "idle");
   const [progress, setProgress] = useState<{ label: string; pct: number } | null>(null);
@@ -259,14 +258,25 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
         {phase === "running" ? t("processing") : method === "pixel" ? t("startPixelBackground") : t("startBackground")}
       </button>
 
-      {phase === "done" && resultFile && (
-        <div className="operation-result-actions">
-          <div className="tool-divider" />
-          <button type="button" className="btn-ghost background-send-button" onClick={sendToCanvas}>{t("sendToCanvas")}</button>
-          <button type="button" className="btn-ghost" onClick={() => onReturnToPixel(resultFile)}>{t("returnToPixel")}</button>
-          <button type="button" className="btn-ghost" onClick={download}>{t("downloadPng")}</button>
-        </div>
-      )}
+      <div className="operation-actions background-result-actions">
+        <button
+          type="button"
+          className="btn-ghost operation-secondary-action background-result-button"
+          disabled={!resultFile || phase === "running"}
+          onClick={sendToCanvas}
+        >
+          {t("sendToCanvas")}
+        </button>
+
+        <button
+          type="button"
+          className="btn-ghost operation-secondary-action background-result-button"
+          disabled={!resultFile || phase === "running"}
+          onClick={download}
+        >
+          {t("downloadPng")}
+        </button>
+      </div>
     </div>
   );
 }

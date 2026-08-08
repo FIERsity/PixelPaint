@@ -267,12 +267,6 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
     }
   };
 
-  const returnToPixel = (file: File) => {
-    setOperation("pixelate");
-    void loadFile(file);
-    onNotice?.(t("returnToPixelize"));
-  };
-
   return (
     <div className="convert-workbench">
       <div className="workbench-head">
@@ -488,7 +482,6 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
               resultFile={backgroundResult}
               onResult={replaceBackgroundResult}
               onImport={onImport}
-              onReturnToPixel={returnToPixel}
               onNotice={onNotice}
             />
           )}
