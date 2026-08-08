@@ -157,6 +157,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const [dragOverColorIndex, setDragOverColorIndex] = useState<number | null>(null);
   const [dragOverPosition, setDragOverPosition] = useState<"before" | "after" | null>(null);
   const dragPreviewRef = useRef<HTMLDivElement | null>(null);
+  const dragOverRef = useRef<{ index: number; position: "before" | "after" } | null>(null);
   const previousPaletteId = useRef(palette.id);
   const [zoom, setZoom] = useState(8);
   const [showGrid, setShowGrid] = useState(true);
@@ -267,9 +268,19 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     commitCustomPalette({ ...palette, colors });
   };
 
+  const updatePaletteDropState = (index: number | null, position: "before" | "after" | null) => {
+    const next = index === null || position === null ? null : { index, position };
+    const current = dragOverRef.current;
+    if (current?.index === next?.index && current?.position === next?.position) return;
+    dragOverRef.current = next;
+    setDragOverColorIndex(next?.index ?? null);
+    setDragOverPosition(next?.position ?? null);
+  };
+
   const clearPaletteDrag = () => {
     dragPreviewRef.current?.remove();
     dragPreviewRef.current = null;
+    dragOverRef.current = null;
     setDraggedColorIndex(null);
     setDragOverColorIndex(null);
     setDragOverPosition(null);
@@ -280,15 +291,14 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", value);
     setDraggedColorIndex(index);
-    setDragOverColorIndex(null);
-    setDragOverPosition(null);
+    updatePaletteDropState(null, null);
 
     const preview = document.createElement("div");
     preview.className = "palette-drag-preview";
     preview.style.background = value;
     document.body.appendChild(preview);
     dragPreviewRef.current = preview;
-    e.dataTransfer.setDragImage(preview, 18, 18);
+    e.dataTransfer.setDragImage(preview, 12, 12);
   };
 
   const updatePaletteDropTarget = (e: React.DragEvent<HTMLDivElement>, index: number) => {
@@ -298,8 +308,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     e.dataTransfer.dropEffect = "move";
     const rect = e.currentTarget.getBoundingClientRect();
     const position = e.clientX < rect.left + rect.width / 2 ? "before" : "after";
-    setDragOverColorIndex(index);
-    setDragOverPosition(position);
+    updatePaletteDropState(index, position);
   };
 
   const dropPaletteColor = (e: React.DragEvent<HTMLDivElement>, index: number) => {
@@ -1149,8 +1158,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
               if (draggedColorIndex === null || e.target !== e.currentTarget) return;
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";
-              setDragOverColorIndex(null);
-              setDragOverPosition("after");
+              updatePaletteDropState(null, null);
             }}
             onDrop={(e) => {
               if (e.target !== e.currentTarget) return;
@@ -1170,9 +1178,8 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
                 onDragLeave={(e) => {
                   const related = e.relatedTarget as Node | null;
                   if (related && e.currentTarget.contains(related)) return;
-                  if (dragOverColorIndex === index) {
-                    setDragOverColorIndex(null);
-                    setDragOverPosition(null);
+                  if (dragOverRef.current?.index === index) {
+                    updatePaletteDropState(null, null);
                   }
                 }}
                 onDrop={(e) => dropPaletteColor(e, index)}

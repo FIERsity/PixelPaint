@@ -360,9 +360,8 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
 .palette-swatch-item.is-dragging .swatch {
   opacity: 0.18; transform: scale(0.84); box-shadow: none;
 }
-.palette-swatch-item.is-dragging .palette-swatch-remove { opacity: 0.35; pointer-events: none; }
-.palette-swatch-item.drop-before { transform: translateX(5px) scale(1.03); }
-.palette-swatch-item.drop-after { transform: translateX(-5px) scale(1.03); }
+.palette-swatch-item.is-dragging .palette-swatch-remove { opacity: 0; visibility: hidden; pointer-events: none; }
+.palette-swatch-item.drop-before, .palette-swatch-item.drop-after { transform: none; }
 .palette-swatch-item.drop-before::before,
 .palette-swatch-item.drop-after::after {
   content: ""; position: absolute; top: -4px; bottom: -4px; width: 3px;
@@ -378,15 +377,23 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
   width: 17px; height: 17px; padding: 0; border: 1px solid var(--border);
   border-radius: 999px; color: var(--muted); background: var(--card);
   font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
-  box-shadow: 0 1px 3px rgba(25, 25, 25, 0.1); transition: all 0.14s ease;
+  opacity: 0; visibility: hidden; transform: scale(0.76);
+  box-shadow: 0 1px 3px rgba(25, 25, 25, 0.1); transition: opacity 0.14s ease, visibility 0.14s ease, transform 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+.palette-swatch-item:hover .palette-swatch-remove,
+.palette-swatch-item:focus-within .palette-swatch-remove {
+  opacity: 1; visibility: visible; transform: scale(1);
+}
+.palette-swatch-item.is-dragging .palette-swatch-remove {
+  opacity: 0; visibility: hidden; transform: scale(0.76); pointer-events: none;
 }
 .palette-swatch-remove:hover, .palette-swatch-remove:focus-visible {
   color: var(--red); border-color: var(--red); transform: scale(1.12); outline: none;
 }
 .palette-drag-hint { margin: -2px 0 9px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .palette-drag-preview {
-  position: fixed; left: -1000px; top: -1000px; width: 36px; height: 36px;
-  border: 3px solid var(--primary); border-radius: 9px; box-shadow: 0 8px 18px rgba(25, 25, 25, 0.22);
+  position: fixed; left: -1000px; top: -1000px; width: 24px; height: 24px;
+  border: 2px solid var(--primary); border-radius: 6px; box-shadow: 0 4px 10px rgba(25, 25, 25, 0.18);
   pointer-events: none;
 }
 .palette-grid.is-dragging { cursor: grabbing; }
