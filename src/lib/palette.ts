@@ -36,9 +36,74 @@ export const GRAYSCALE: Palette = {
   colors: ["#000000", "#3b3b3b", "#767676", "#b2b2b2", "#eeeeee", "#ffffff"],
 };
 
+// 经典游戏调色板（色值来自 LOSPEC / 原作者）
+export const ENDESGA32: Palette = {
+  name: "ENDESGA-32",
+  colors: [
+    "#be4a2f", "#d77643", "#ead4aa", "#e4a672", "#b86f50", "#733e39", "#3e2731", "#a22633",
+    "#e43b44", "#f77622", "#feae34", "#fee761", "#63c74d", "#3e8948", "#265c42", "#193c3e",
+    "#124e89", "#0099db", "#2ce8f5", "#ffffff", "#c0cbdc", "#8b9bb4", "#5a6988", "#3a4466",
+    "#262b44", "#181425", "#ff0044", "#68386c", "#b55088", "#f6757a", "#e8b796", "#c28569",
+  ],
+};
+
+export const DB16: Palette = {
+  name: "DawnBringer 16",
+  colors: [
+    "#140c1c", "#442434", "#30346d", "#4e4a4e", "#854c30", "#346524", "#d04648", "#757161",
+    "#597dce", "#d27d2c", "#8595a1", "#6daa2c", "#d2aa99", "#6dc2ca", "#dad45e", "#deeed6",
+  ],
+};
+
+export const DB32: Palette = {
+  name: "DawnBringer 32",
+  colors: [
+    "#000000", "#222034", "#45283c", "#663931", "#8f563b", "#df7126", "#d9a066", "#eec39a",
+    "#fbf236", "#99e550", "#6abe30", "#37946e", "#4b692f", "#524b24", "#323c39", "#3f3f74",
+    "#306082", "#5b6ee1", "#639bff", "#5fcde4", "#cbdbfc", "#ffffff", "#9badb7", "#847e87",
+    "#696a6a", "#595652", "#76428a", "#ac3232", "#d95763", "#d77bba", "#8f974a", "#8a6f30",
+  ],
+};
+
+export const ARNE16: Palette = {
+  name: "ARNE16",
+  colors: [
+    "#000000", "#9d9d9d", "#ffffff", "#be2633", "#e06f8b", "#493c2b", "#a46422", "#eb8931",
+    "#f7e26b", "#2f484e", "#44891a", "#a3ce27", "#1b2632", "#005784", "#31a2f2", "#b2dcef",
+  ],
+};
+
+export const APOLLO: Palette = {
+  name: "Apollo",
+  colors: [
+    "#3f3f74", "#7a4369", "#a84f53", "#d67841", "#e5b361", "#c9d684", "#84b188", "#406b70",
+    "#2f6d80", "#306082", "#475d91", "#584b82", "#6d4482", "#8a4682", "#a14d80", "#b75a79",
+  ],
+};
+
+export const CGA: Palette = {
+  name: "CGA",
+  colors: [
+    "#000000", "#0000aa", "#00aa00", "#00aaaa", "#aa0000", "#aa00aa", "#aa5500", "#aaaaaa",
+    "#555555", "#5555ff", "#55ff55", "#55ffff", "#ff5555", "#ff55ff", "#ffff55", "#ffffff",
+  ],
+};
+
 export const NO_PALETTE: Palette = { name: "自动（不限色）", colors: [] };
 
-export const PRESET_PALETTES: Palette[] = [NO_PALETTE, SWEETIE16, PICO8, GAMEBOY, GRAYSCALE];
+export const PRESET_PALETTES: Palette[] = [
+  NO_PALETTE,
+  SWEETIE16,
+  PICO8,
+  ENDESGA32,
+  DB16,
+  DB32,
+  ARNE16,
+  APOLLO,
+  CGA,
+  GAMEBOY,
+  GRAYSCALE,
+];
 
 export const DEFAULT_PALETTE = SWEETIE16;
 

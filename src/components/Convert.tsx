@@ -103,6 +103,7 @@ export default function Convert({ onImport }: ConvertProps) {
   useEffect(() => {
     const canvas = previewRef.current;
     if (!canvas || !result) return;
+    if (result.w < 1 || result.h < 1) return; // 防止尺寸为 0 时 createImageData 抛异常
     canvas.width = result.w;
     canvas.height = result.h;
     const ctx = canvas.getContext("2d");
@@ -134,9 +135,10 @@ export default function Convert({ onImport }: ConvertProps) {
   }, []);
 
   const onWidth = (v: number) => {
-    setOutW(v);
+    const w = Math.max(1, Math.min(512, Math.round(v) || 1));
+    setOutW(w);
     if (lockRatio && source) {
-      setOutH(Math.max(1, Math.round((v * source.h) / source.w)));
+      setOutH(Math.max(1, Math.min(512, Math.round((w * source.h) / source.w))));
     }
   };
 
@@ -211,7 +213,7 @@ export default function Convert({ onImport }: ConvertProps) {
             <div className="size-row">
               <input className="num-input" type="number" min={1} max={512} value={outW} onChange={(e) => onWidth(Number(e.target.value))} />
               <span style={{ color: "var(--muted)" }}>×</span>
-              <input className="num-input" type="number" min={1} max={512} value={outH} onChange={(e) => setOutH(Number(e.target.value))} />
+              <input className="num-input" type="number" min={1} max={512} value={outH} onChange={(e) => setOutH(Math.max(1, Math.min(512, Number(e.target.value) || 1)))} />
             </div>
             <label className="ghost-check" style={{ marginTop: 6 }}>
               <input type="checkbox" checked={lockRatio} onChange={(e) => setLockRatio(e.target.checked)} />

@@ -4,7 +4,7 @@ import {
   History, mirrorPoints, putPixel, uid,
   type Layer, type MirrorMode, type PixelDoc, type Tool,
 } from "../lib/pixelDoc";
-import { DEFAULT_PALETTE, hexToRgb, rgbToHex, type Palette } from "../lib/palette";
+import { DEFAULT_PALETTE, hexToRgb, PRESET_PALETTES, rgbToHex, type Palette } from "../lib/palette";
 
 interface EditorProps {
   doc: PixelDoc;
@@ -384,9 +384,14 @@ export default function Editor({ doc, setDoc }: EditorProps) {
             className="num-input"
             style={{ width: "100%", marginBottom: 10 }}
             value={palette.name}
-            onChange={(e) => setPalette({ ...palette, name: e.target.value })}
+            onChange={(e) => {
+              const p = PRESET_PALETTES.find((x) => x.name === e.target.value);
+              if (p) setPalette(p);
+            }}
           >
-            <option value={palette.name}>{palette.name}</option>
+            {PRESET_PALETTES.map((p) => (
+              <option key={p.name} value={p.name}>{p.name}</option>
+            ))}
           </select>
           <div className="palette-grid">
             {palette.colors.map((c) => (

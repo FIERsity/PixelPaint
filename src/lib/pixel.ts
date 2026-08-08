@@ -22,6 +22,7 @@ export function downsample(
   outW: number,
   outH: number,
 ): Uint8ClampedArray {
+  if (outW < 1 || outH < 1 || srcW < 1 || srcH < 1) return new Uint8ClampedArray(0);
   const out = new Uint8ClampedArray(outW * outH * 4);
   const xRatio = srcW / outW;
   const yRatio = srcH / outH;
