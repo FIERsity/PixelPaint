@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { checkerStyle } from "../lib/checker";
+import { useI18n } from "../lib/i18n";
 
 export type PreviewOperation = "pixelate" | "background";
 
@@ -18,6 +19,7 @@ interface ResultPreviewProps {
 }
 
 export default function ResultPreview({ operation, result, backgroundUrl, busy, error }: ResultPreviewProps) {
+  const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const [imageScale, setImageScale] = useState(1);
@@ -75,8 +77,8 @@ export default function ResultPreview({ operation, result, backgroundUrl, busy, 
   return (
     <div className="card result-card">
       <div className="panel-head">
-        <h2 className="card-title">结果预览</h2>
-        {showBackground && <span className="badge">透明结果</span>}
+        <h2 className="card-title">{t("resultPreview")}</h2>
+        {showBackground && <span className="badge">{t("transparentResult")}</span>}
         {!showBackground && result && <span className="badge">{result.w} × {result.h} px</span>}
       </div>
 
@@ -85,7 +87,7 @@ export default function ResultPreview({ operation, result, backgroundUrl, busy, 
           <img
             ref={imageRef}
             src={backgroundUrl ?? undefined}
-            alt="背景处理结果"
+            alt={t("backgroundResultAlt")}
             className={`pixelated${imageScale >= 1 ? " checker" : ""}`}
             onLoad={updateImageScale}
             style={{
@@ -114,7 +116,7 @@ export default function ResultPreview({ operation, result, backgroundUrl, busy, 
         </div>
       ) : (
         <div className="preview-box checker result-empty">
-          {operation === "background" ? "完成转像素后可处理背景" : "选择图片后在此查看像素化结果"}
+          {operation === "background" ? t("backgroundEmpty") : t("pixelizeEmpty")}
         </div>
       )}
 

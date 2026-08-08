@@ -10,8 +10,8 @@ export interface PixelAnim {
   fps: number;
 }
 
-export function createAnim(width = 32, height = 32, fps = 8): PixelAnim {
-  return { frames: [createDoc(width, height)], fps };
+export function createAnim(width = 32, height = 32, fps = 8, layerName = "图层 1"): PixelAnim {
+  return { frames: [createDoc(width, height, layerName)], fps };
 }
 
 export function cloneFrame(doc: PixelDoc): PixelDoc {
@@ -19,12 +19,12 @@ export function cloneFrame(doc: PixelDoc): PixelDoc {
 }
 
 /** 在当前帧之后插入新帧；blank = 空白同尺寸，duplicate = 复制当前帧 */
-export function addFrame(anim: PixelAnim, mode: "blank" | "duplicate", index?: number): PixelAnim {
+export function addFrame(anim: PixelAnim, mode: "blank" | "duplicate", index?: number, layerName = "图层 1"): PixelAnim {
   const i = Math.max(0, Math.min(index ?? anim.frames.length - 1, anim.frames.length - 1));
   const source = anim.frames[i];
   const next = mode === "duplicate"
     ? cloneFrame(source)
-    : createDoc(source.width, source.height);
+    : createDoc(source.width, source.height, layerName);
   return {
     ...anim,
     frames: [...anim.frames.slice(0, i + 1), next, ...anim.frames.slice(i + 1)],

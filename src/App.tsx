@@ -6,12 +6,13 @@ import {
 } from "./lib/anim";
 import { composite, type PixelDoc } from "./lib/pixelDoc";
 import { clearAutosave, downloadProject, loadAutosave, readProjectFile, saveAutosave } from "./lib/persist";
+import { useI18n } from "./lib/i18n";
 
 type Tab = "editor" | "convert";
 
-const TABS: Array<{ id: Tab; label: string }> = [
-  { id: "editor", label: "画板" },
-  { id: "convert", label: "转像素" },
+const TABS: Array<{ id: Tab; labelKey: string }> = [
+  { id: "editor", labelKey: "editor" },
+  { id: "convert", labelKey: "convert" },
 ];
 
 function BrandIcon() {
@@ -35,22 +36,67 @@ function hasContent(doc: PixelDoc): boolean {
 }
 
 export default function App() {
+  const { language, setLanguage, t } = useI18n();
   const [tab, setTab] = useState<Tab>("editor");
-  const [anim, setAnim] = useState<PixelAnim>(() => createAnim(32, 32));
+  const [anim, setAnim] = useState<PixelAnim>(() => createAnim(32, 32, 8, t("layerName", { index: 1 })));
   const [frameIndex, setFrameIndex] = useState(0);
   const [epoch, setEpoch] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [onion, setOnion] = useState(false);
   const [onionNext, setOnionNext] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackText, setFeedbackText] = useState("");
+  const [feedbackSending, setFeedbackSending] = useState(false);
   const restoringRef = useRef(true);
   const noticeTimer = useRef<number | undefined>(undefined);
+  const tRef = useRef(t);
+  tRef.current = t;
 
   const showNotice = useCallback((msg: string) => {
     setNotice(msg);
     window.clearTimeout(noticeTimer.current);
     noticeTimer.current = window.setTimeout(() => setNotice(null), 3600);
   }, []);
+
+  const closeFeedback = useCallback(() => {
+    if (feedbackSending) return;
+    setFeedbackOpen(false);
+  }, [feedbackSending]);
+
+  const submitFeedback = useCallback(async () => {
+    const text = feedbackText.trim();
+    if (!text) {
+      showNotice(t("feedbackEmpty"));
+      return;
+    }
+    setFeedbackSending(true);
+    try {
+      const response = await fetch("https://feedback.070315.site/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setFeedbackText("");
+      setFeedbackOpen(false);
+      showNotice(t("feedbackSuccess"));
+    } catch (error) {
+      console.error("[PixelPaint] feedback submission failed:", error);
+      showNotice(t("feedbackFailure"));
+    } finally {
+      setFeedbackSending(false);
+    }
+  }, [feedbackText, showNotice, t]);
+
+  useEffect(() => {
+    if (!feedbackOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeFeedback();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeFeedback, feedbackOpen]);
 
   const doc = anim.frames[frameIndex] ?? anim.frames[0];
   const frames = anim.frames;
@@ -68,25 +114,25 @@ export default function App() {
 
   const insertFrame = useCallback((mode: "blank" | "duplicate") => {
     setAnim((a) => {
-      const next = addFrame(a, mode, frameIndex);
+      const next = addFrame(a, mode, frameIndex, t("layerName", { index: 1 }));
       setFrameIndex(frameIndex + 1);
       return next;
     });
     setEpoch((e) => e + 1);
     setPlaying(false);
-  }, [frameIndex]);
+  }, [frameIndex, t]);
 
   const removeFrame = useCallback(() => {
     if (frames.length <= 1) {
-      showNotice("至少保留一帧");
+      showNotice(t("atLeastOneFrame"));
       return;
     }
-    if (!confirm(`删除第 ${frameIndex + 1} 帧？`)) return;
+    if (!confirm(t("deleteFrameConfirm", { index: frameIndex + 1 }))) return;
     setAnim((a) => deleteFrame(a, frameIndex) ?? a);
     setFrameIndex((i) => clampIndex(i, frames.length - 1));
     setEpoch((e) => e + 1);
     setPlaying(false);
-  }, [frames.length, frameIndex, showNotice]);
+  }, [frames.length, frameIndex, showNotice, t]);
 
   const shiftFrame = useCallback((dir: -1 | 1) => {
     setAnim((a) => {
@@ -128,7 +174,11 @@ export default function App() {
         setAnim(draft);
         setFrameIndex(clampIndex(0, draft.frames.length));
         setEpoch((e) => e + 1);
-        showNotice(`已恢复上次的草稿（${draft.frames.length} 帧 · ${draft.frames[0]?.width}×${draft.frames[0]?.height}）`);
+        showNotice(tRef.current("draftRestored", {
+          count: draft.frames.length,
+          width: draft.frames[0]?.width ?? 0,
+          height: draft.frames[0]?.height ?? 0,
+        }));
       }
       restoringRef.current = false;
     })();
@@ -140,7 +190,7 @@ export default function App() {
     if (restoringRef.current) return;
     const t = window.setTimeout(() => {
       const res = saveAutosave(anim);
-      if (!res.ok && res.reason) showNotice(res.reason);
+      if (!res.ok) showNotice(tRef.current("autosaveError"));
     }, 800);
     return () => window.clearTimeout(t);
   }, [anim, showNotice]);
@@ -149,45 +199,45 @@ export default function App() {
 
   // 转像素 / 背景处理结果 -> 画板（覆盖前确认）
   const handleImport = useCallback((next: PixelDoc) => {
-    if (hasContent(doc) && !confirm("画板已有内容，导入会替换当前帧（可在画板里撤销）。继续？")) return;
+    if (hasContent(doc) && !confirm(t("replaceCurrentFrameConfirm"))) return;
     setAnim((a) => {
       const frames2 = a.frames.map((f, i) => (i === frameIndex ? next : f));
       return { ...a, frames: frames2 };
     });
     setTab("editor");
     setEpoch((e) => e + 1);
-    showNotice(`已送入画板 ${next.width}×${next.height}`);
-  }, [doc, frameIndex, showNotice]);
+    showNotice(t("sentToCanvas", { width: next.width, height: next.height }));
+  }, [doc, frameIndex, showNotice, t]);
 
   const startOver = () => {
-    if (!confirm("清空画布并删除本地草稿？")) return;
+    if (!confirm(t("clearCanvasConfirm"))) return;
     clearAutosave();
-    setAnim(createAnim(32, 32));
+    setAnim(createAnim(32, 32, 8, t("layerName", { index: 1 })));
     setFrameIndex(0);
     setEpoch((e) => e + 1);
     setPlaying(false);
-    showNotice("已清空，重新开始");
+    showNotice(t("cleared"));
   };
 
   // 工程保存 / 打开（多帧）
   const saveProject = useCallback(() => {
     downloadProject(anim);
-    showNotice(`工程已保存（${anim.frames.length} 帧 · ${anim.fps}fps）`);
-  }, [anim, showNotice]);
+    showNotice(t("projectSaved", { count: anim.frames.length, fps: anim.fps }));
+  }, [anim, showNotice, t]);
 
   const openProject = useCallback(async (file: File) => {
     const next = await readProjectFile(file);
     if (!next) {
-      showNotice("无法读取该工程文件");
+      showNotice(t("invalidProject"));
       return;
     }
-    if (!confirm(`打开工程会替换当前画布与全部帧（共 ${next.frames.length} 帧），继续？`)) return;
+    if (!confirm(t("replaceProjectConfirm", { count: next.frames.length }))) return;
     setAnim(next);
     setFrameIndex(0);
     setEpoch((e) => e + 1);
     setPlaying(false);
-    showNotice(`已打开工程（${next.frames.length} 帧 · ${next.fps}fps）`);
-  }, [showNotice]);
+    showNotice(t("projectOpened", { count: next.frames.length, fps: next.fps }));
+  }, [showNotice, t]);
 
   // Tab 方向键导航（ARIA tabs 规范）
   const onTabKeyDown = (e: React.KeyboardEvent) => {
@@ -207,25 +257,45 @@ export default function App() {
             <div className="brand-icon"><BrandIcon /></div>
             <div>
               <h1>Pixel<span className="brand-sub">Paint</span></h1>
-              <p className="tagline">像素画工作站 · 画板 / 转像素 · 帧动画</p>
+              <p className="tagline">{t("tagline")}</p>
             </div>
           </div>
           <div className="header-actions">
-            <p className="privacy-note">纯本地处理 · 不上传</p>
-            <nav className="tabs" role="tablist" aria-label="工作区" onKeyDown={onTabKeyDown}>
-              {TABS.map((t) => (
+            <div className="lang-switch" role="group" aria-label={t("language")}>
+              <button
+                type="button"
+                className={`lang-btn ${language === "zh" ? "active" : ""}`}
+                aria-pressed={language === "zh"}
+                onClick={() => setLanguage("zh")}
+              >
+                {t("langZh")}
+              </button>
+              <button
+                type="button"
+                className={`lang-btn ${language === "en" ? "active" : ""}`}
+                aria-pressed={language === "en"}
+                onClick={() => setLanguage("en")}
+              >
+                {t("langEn")}
+              </button>
+            </div>
+            <button type="button" className="btn-ghost header-feedback" onClick={() => setFeedbackOpen(true)}>
+              {t("feedback")}
+            </button>
+            <nav className="tabs" role="tablist" aria-label={t("workspace")} onKeyDown={onTabKeyDown}>
+              {TABS.map((tabItem) => (
                 <button
-                  key={t.id}
+                  key={tabItem.id}
                   type="button"
                   role="tab"
-                  id={`tab-${t.id}`}
-                  aria-selected={tab === t.id}
-                  aria-controls={`panel-${t.id}`}
-                  tabIndex={tab === t.id ? 0 : -1}
-                  className={`tab ${tab === t.id ? "active" : ""}`}
-                  onClick={() => setTab(t.id)}
+                  id={`tab-${tabItem.id}`}
+                  aria-selected={tab === tabItem.id}
+                  aria-controls={`panel-${tabItem.id}`}
+                  tabIndex={tab === tabItem.id ? 0 : -1}
+                  className={`tab ${tab === tabItem.id ? "active" : ""}`}
+                  onClick={() => setTab(tabItem.id)}
                 >
-                  {t.label}
+                  {t(tabItem.labelKey)}
                 </button>
               ))}
             </nav>
@@ -278,15 +348,44 @@ export default function App() {
         <div className="toast show" role="status" aria-live="polite">{notice}</div>
       )}
 
+      {feedbackOpen && (
+        <div
+          className="modal-overlay open"
+          role="presentation"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) closeFeedback(); }}
+        >
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="feedback-title">
+            <h2 id="feedback-title">{t("feedbackTitle")}</h2>
+            <p className="modal-hint">{t("feedbackHint")}</p>
+            <textarea
+              autoFocus
+              rows={4}
+              maxLength={2000}
+              value={feedbackText}
+              placeholder={t("feedbackPlaceholder")}
+              onChange={(e) => setFeedbackText(e.target.value)}
+            />
+            <div className="modal-actions">
+              <button type="button" className="btn-ghost" onClick={closeFeedback} disabled={feedbackSending}>
+                {t("cancel")}
+              </button>
+              <button type="button" className="btn-primary" onClick={() => void submitFeedback()} disabled={feedbackSending}>
+                {feedbackSending ? t("sending") : t("submit")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <footer className="site-footer">
         <div className="container">
           <p>
-            PixelPaint · 在线像素画工作站 · 图片仅在本地浏览器中处理，绝不上传
+            {t("footer")}
             {" · "}
-            <button type="button" className="link-btn" onClick={startOver}>清空重来</button>
+            <button type="button" className="link-btn" onClick={startOver}>{t("clearRestart")}</button>
           </p>
           <p style={{ marginTop: 6 }}>
-            Icons by{" "}
+            {t("iconsBy")} {" "}
             <a href="https://pxlkit.xyz" target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>
               Pxlkit
             </a>

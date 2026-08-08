@@ -95,8 +95,18 @@ input[type="checkbox"]:focus-visible, input[type="range"]:focus-visible {
 .brand h1 { font-size: 21px; font-weight: 700; letter-spacing: 0.4px; }
 .brand-sub { color: var(--muted); font-size: 13px; font-weight: 500; margin-left: 4px; }
 .tagline { font-size: 13px; color: var(--muted); }
-.privacy-note { font-size: 13px; color: var(--muted); white-space: nowrap; }
-.header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.lang-switch {
+  display: inline-flex; border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden; background: var(--card);
+}
+.lang-btn {
+  font: inherit; font-size: 12px; font-weight: 600; color: var(--muted);
+  border: none; background: transparent; padding: 5px 9px; cursor: pointer;
+}
+.lang-btn:hover { color: var(--primary-dark); background: var(--primary-soft); }
+.lang-btn.active { color: #fff; background: var(--primary); }
+.header-feedback { white-space: nowrap; }
 
 /* ---------- Tab 导航 ---------- */
 .tabs { display: flex; gap: 4px; }
@@ -219,8 +229,9 @@ input[type="checkbox"]:focus-visible, input[type="range"]:focus-visible {
 @media (max-width: 560px) {
   .header-inner { padding: 12px 0; }
   .brand h1 { font-size: 19px; }
-  .tagline, .privacy-note { font-size: 12px; }
-  .privacy-note { display: none; }
+  .tagline { font-size: 12px; }
+  .header-actions { width: 100%; gap: 6px; }
+  .header-feedback { padding: 5px 10px; }
   .tool-btn { min-width: 44px; font-size: 10.5px; }
   .card { padding: 14px; margin-top: 14px; }
   .shortcut-hint { display: none; }
@@ -465,3 +476,24 @@ input[type="checkbox"]:focus-visible, input[type="range"]:focus-visible {
 .site-footer { margin-top: auto; padding: 26px 0; text-align: center; }
 .site-footer p { font-size: 13px; color: var(--muted); }
 main { flex: 1; padding-bottom: 20px; }
+
+/* ---------- 反馈弹窗 ---------- */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px; background: rgba(25, 25, 25, 0.42);
+}
+.modal {
+  width: min(100%, 460px); padding: 22px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18);
+}
+.modal h2 { font-size: 18px; margin-bottom: 6px; }
+.modal-hint { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+.modal textarea {
+  width: 100%; min-height: 104px; padding: 10px 12px; resize: vertical;
+  font: inherit; font-size: 14px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 10px; outline: none;
+}
+.modal textarea:focus { border-color: var(--primary); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }

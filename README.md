@@ -1,81 +1,58 @@
-# PixelPaint · 在线像素画工作站
+# PixelPaint
 
-在线像素画工作站：**画像素画 · 图片转像素化 · 背景处理**。图片全程在浏览器本地处理，不会上传到服务器。
+本地优先的像素画工作站：画板、图片转像素和背景处理。图片在浏览器中处理，不上传服务器。
 
 在线使用：https://FIERsity.github.io/PixelPaint/
 
 ## 功能
 
-### 🎨 画板
-- 铅笔 / 橡皮 / 取色 / 填充 / 直线 / 矩形
-- 可调笔刷大小、画布缩放（1×~32×）、网格开关
-- 多图层（新建 / 删除 / 排序 / 显隐 / 不透明度）
-- 撤销 / 重做
-- 预设调色板（Sweetie 16 / PICO-8 / Game Boy / 灰度）+ 任意取色
-- 导出 PNG（1×~16× 最近邻放大）
+### 画板
 
-### 🖼 转像素
-- 上传任意图片 → 降采样 + 图片颜色聚类量化 → 像素画
-- 常用输出尺寸预设（16 / 32 / 64 / 128 / 256 px，按原图比例）+ 自定义
-- 自动调色板从当前图片提取主要颜色，也可选择固定调色板
-- 可调颜色数、调色板、抖动算法（Floyd-Steinberg / Atkinson / Bayer）
-- 大图处理在 Web Worker 中进行，不卡界面
-- 一键发送到画板继续编辑，或切换到处理背景
+- 铅笔、橡皮、取色、填充、直线、矩形
+- 多图层、撤销/重做、帧动画和洋葱皮
+- 调色板、网格、最近邻 PNG 导出
 
-### 🧩 处理背景
-- AI 自动去除背景（ONNX Runtime 本地推理）
-- 快速（量化 ~40MB）/ 精细（ISNet）两档模型
-- 默认按像素画规则整理为硬边透明，可调 alpha 阈值，也可保留柔和边缘
-- 首次使用下载模型，之后浏览器缓存秒开
-- 在转像素工作区内作为独立操作使用，和转像素共用结果预览
-- 默认处理当前像素化结果，结果可下载 PNG 或发送到画板
+### 转像素
 
-## 技术栈
+- 按常用尺寸预设或自定义尺寸转为像素画
+- 从当前图片提取自动调色板
+- 支持固定调色板、颜色数和抖动算法
+- 结果可发送到画板，或继续处理背景
 
-Vite + React + TypeScript + Tailwind CSS v4 + @imgly/background-removal
+### 背景处理
 
-## 图标
+- 浏览器本地 AI 背景处理
+- 像素硬边或柔和边缘
+- 透明 PNG 结果可预览、下载或发送到画板
 
-工具栏 / 操作按钮的像素风图标来自 [Pxlkit](https://pxlkit.xyz)
-（[License: MIT code + Pxlkit Assets License](https://github.com/Joangeldelarosa/pxlkit)）——
-免费使用需署名，已在页面 footer 标注。直线 / 矩形图标为本项目自绘（同格式）。
+界面支持中文和 English，反馈入口位于右上角。
 
 ## 本地开发
 
 ```bash
 npm install
-npm run dev       # 本地开发
-npm run build     # 构建到 dist/
-npm run preview   # 预览构建产物
+npm run dev
 ```
 
-## 部署
+检查项目：
 
-推送到 `main` 分支自动部署到 GitHub Pages（见 `.github/workflows/pages.yml`），
-或手动：Settings → Pages → Source 选 GitHub Actions。
-
-## 目录结构
-
-```
-PixelPaint/
-├── src/
-│   ├── components/
-│   │   ├── Editor.tsx     # 画板编辑器
-│   │   ├── Convert.tsx    # 图片转像素化 + 统一结果预览
-│   │   ├── Cutout.tsx     # 背景处理设置与本地模型调用
-│   │   └── ResultPreview.tsx # 转像素 / 背景处理共享预览
-│   ├── lib/
-│   │   ├── pixelDoc.ts    # 像素文档模型 + 画笔工具 + 撤销
-│   │   ├── pixel.ts       # 降采样 / 量化 / 抖动算法
-│   │   ├── dimensions.ts  # 输出尺寸输入与边界处理
-│   │   ├── palette.ts     # 调色板
-│   │   └── toPixel.worker.ts  # 转像素 Web Worker
-│   ├── App.tsx            # 布局 + 工作区导航
-│   └── index.css          # TinyPress 风格设计系统
-├── .github/workflows/pages.yml
-└── README.md
+```bash
+npm test
+npm run lint
+npm run build
 ```
 
-## 许可证
+## English
+
+PixelPaint is a local-first pixel art workstation for drawing, image pixelization, and background processing. Images stay in the browser.
+
+- Canvas editor with layers, undo/redo, grids, palettes, and frame animation
+- Pixelization with presets, custom dimensions, extracted palettes, and dithering
+- Local background processing with hard or soft pixel edges
+- Chinese and English UI; feedback is available in the top-right corner
+
+Online: https://FIERsity.github.io/PixelPaint/
+
+## License
 
 MIT

@@ -22,11 +22,14 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.error) {
+      const english = typeof document !== "undefined" && document.documentElement.lang === "en";
       return (
         <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
           <div className="card" style={{ maxWidth: 460, width: "100%", textAlign: "center" }}>
             <div style={{ fontSize: 34, marginBottom: 8 }}>🖌️</div>
-            <h2 style={{ fontSize: 17, marginBottom: 8 }}>画布出了点问题</h2>
+            <h2 style={{ fontSize: 17, marginBottom: 8 }}>
+              {english ? "The canvas ran into a problem" : "画布出了点问题"}
+            </h2>
             <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16, wordBreak: "break-all" }}>
               {this.state.error.message}
             </p>
@@ -38,7 +41,7 @@ export default class ErrorBoundary extends Component<Props, State> {
                 location.reload();
               }}
             >
-              重新加载
+              {english ? "Reload" : "重新加载"}
             </button>
           </div>
         </div>

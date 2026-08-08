@@ -20,6 +20,7 @@ import { Rect } from "./icons/rect";
 import PixelIcon from "../lib/PixelIcon";
 import type { PxlKitData } from "../lib/pixelTypes";
 import { checkerStyle } from "../lib/checker";
+import { useI18n } from "../lib/i18n";
 
 export interface AnimationProps {
   frames: PixelDoc[];
@@ -54,13 +55,13 @@ interface EditorProps {
 
 const ZOOMS = [1, 2, 4, 8, 16, 32];
 
-const TOOLS: Array<{ id: Tool; label: string; icon: PxlKitData; key: string }> = [
-  { id: "pencil", label: "铅笔", icon: Pencil, key: "B" },
-  { id: "eraser", label: "橡皮", icon: Eraser, key: "E" },
-  { id: "picker", label: "取色", icon: Eyedropper, key: "I" },
-  { id: "fill", label: "填充", icon: PaintBucket, key: "G" },
-  { id: "line", label: "直线", icon: Line, key: "L" },
-  { id: "rect", label: "矩形", icon: Rect, key: "R" },
+const TOOLS: Array<{ id: Tool; labelKey: string; icon: PxlKitData; key: string }> = [
+  { id: "pencil", labelKey: "pencil", icon: Pencil, key: "B" },
+  { id: "eraser", labelKey: "eraser", icon: Eraser, key: "E" },
+  { id: "picker", labelKey: "picker", icon: Eyedropper, key: "I" },
+  { id: "fill", labelKey: "fill", icon: PaintBucket, key: "G" },
+  { id: "line", labelKey: "line", icon: Line, key: "L" },
+  { id: "rect", labelKey: "rectangle", icon: Rect, key: "R" },
 ];
 
 const TRANSPARENT: Rgba = [0, 0, 0, 0];
@@ -72,6 +73,7 @@ function FrameThumb({ frame, active, index, onClick }: {
   index: number;
   onClick: () => void;
 }) {
+  const { t } = useI18n();
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const c = ref.current;
@@ -96,8 +98,8 @@ function FrameThumb({ frame, active, index, onClick }: {
       type="button"
       className={`frame-thumb ${active ? "active" : ""}`}
       onClick={onClick}
-      title={`第 ${index + 1} 帧`}
-      aria-label={`选择第 ${index + 1} 帧`}
+      title={t("frameTitle", { index: index + 1 })}
+      aria-label={t("selectFrame", { index: index + 1 })}
       aria-pressed={active}
     >
       <canvas ref={ref} className="pixelated" />
@@ -107,6 +109,7 @@ function FrameThumb({ frame, active, index, onClick }: {
 }
 
 export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, epoch = 0, onSaveProject, onOpenProject }: EditorProps) {
+  const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const historyRef = useRef(new History(80));
@@ -344,7 +347,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
       const img = composite(doc);
       const [r, g, b, a] = getPixel(img, doc.width, x, y);
       if (a === 0) {
-        onNotice?.("这里是透明像素，未取色");
+        onNotice?.(t("transparentPixel"));
       } else {
         const hex = rgbToHex(r, g, b);
         setColor(hex);
@@ -496,7 +499,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
   const addLayer = () => withHistory(() => {
     const layer: Layer = {
       id: uid(),
-      name: `图层 ${doc.layers.length + 1}`,
+      name: t("layerName", { index: doc.layers.length + 1 }),
       visible: true,
       opacity: 1,
       pixels: new Uint8ClampedArray(doc.width * doc.height * 4),
@@ -507,11 +510,11 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
 
   const removeLayer = (i: number) => {
     if (doc.layers.length <= 1) {
-      onNotice?.("至少要保留一个图层");
+      onNotice?.(t("atLeastOneLayer"));
       return;
     }
-    const name = doc.layers[i]?.name ?? "该图层";
-    if (!confirm(`删除「${name}」？可以用撤销恢复。`)) return;
+    const name = localizeLayerName(doc.layers[i]?.name ?? t("unnamedLayer"));
+    if (!confirm(t("removeLayerConfirm", { name }))) return;
     withHistory(() => {
       const layers = doc.layers.filter((_, idx) => idx !== i);
       setDoc({ ...doc, layers });
@@ -539,7 +542,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
   };
 
   const clearLayer = () => {
-    if (!confirm("清空当前图层？可以用撤销恢复。")) return;
+    if (!confirm(t("clearLayerConfirm"))) return;
     withHistory(() => {
       const layer = doc.layers[layerIndex];
       if (layer) layer.pixels.fill(0);
@@ -557,17 +560,19 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
     const h = clampSize(sizeH);
     if (w === doc.width && h === doc.height) return;
     const shrinking = w < doc.width || h < doc.height;
-    if (shrinking && !confirm(`缩小画布会裁掉超出部分（${doc.width}×${doc.height} → ${w}×${h}），继续？`)) return;
+    if (shrinking && !confirm(t("resizeConfirm", {
+      fromW: doc.width, fromH: doc.height, toW: w, toH: h,
+    }))) return;
     withHistory(() => setDoc(resizeDoc(doc, w, h)));
-    onNotice?.(`画布已调整为 ${w}×${h}（内容保留）`);
+    onNotice?.(t("resized", { width: w, height: h }));
   };
 
   const newCanvas = () => {
     const w = clampSize(sizeW);
     const h = clampSize(sizeH);
-    if (!confirm(`新建 ${w}×${h} 空白画布？当前内容会被清空（可撤销）。`)) return;
+    if (!confirm(t("newCanvasConfirm", { width: w, height: h }))) return;
     withHistory(() => {
-      setDoc(createDoc(w, h));
+      setDoc(createDoc(w, h, t("layerName", { index: 1 })));
       setActiveLayer(0);
     });
   };
@@ -651,37 +656,41 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
   const canvasChecker = checkerStyle(cell);
   const canUndo = historyRef.current.canUndo;
   const canRedo = historyRef.current.canRedo;
+  const localizeLayerName = (name: string) => {
+    const match = name.match(/^(?:图层|Layer)\s+(\d+)$/);
+    return match ? t("layerName", { index: Number(match[1]) }) : name;
+  };
 
   return (
     <div className="editor-layout">
       {/* 工具条 */}
-      <aside className="card tool-panel" aria-label="绘图工具">
+      <aside className="card tool-panel" aria-label={t("drawingTools")}>
         <div className="tool-list">
-          {TOOLS.map((t) => (
+          {TOOLS.map((toolItem) => (
             <button
-              key={t.id}
+              key={toolItem.id}
               type="button"
-              className={`tool-btn ${tool === t.id ? "active" : ""}`}
-              onClick={() => setTool(t.id)}
-              title={`${t.label}（${t.key}）`}
-              aria-label={t.label}
-              aria-pressed={tool === t.id}
+              className={`tool-btn ${tool === toolItem.id ? "active" : ""}`}
+              onClick={() => setTool(toolItem.id)}
+              title={`${t(toolItem.labelKey)} (${toolItem.key})`}
+              aria-label={t(toolItem.labelKey)}
+              aria-pressed={tool === toolItem.id}
             >
-              <PixelIcon data={t.icon} size={22} />
-              <span>{t.label}</span>
+              <PixelIcon data={toolItem.icon} size={22} />
+              <span>{t(toolItem.labelKey)}</span>
             </button>
           ))}
         </div>
 
         <div className="tool-divider" />
         <div className="tool-panel-field">
-          <label className="field-label" htmlFor="brush-size">笔刷大小</label>
+          <label className="field-label" htmlFor="brush-size">{t("brushSize")}</label>
           <select id="brush-size" className="num-input" style={{ width: "100%" }} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))}>
             {[1, 2, 3, 4, 5].map((s) => <option key={s} value={s}>{s} px</option>)}
           </select>
         </div>
         <div className="tool-panel-field">
-          <label className="field-label" htmlFor="zoom-level">画布缩放</label>
+          <label className="field-label" htmlFor="zoom-level">{t("canvasZoom")}</label>
           <select id="zoom-level" className="num-input" style={{ width: "100%" }} value={zoom} onChange={(e) => setZoom(Number(e.target.value))}>
             {ZOOMS.map((z) => <option key={z} value={z}>{z}×</option>)}
           </select>
@@ -689,7 +698,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
         {tool === "rect" && (
           <label className="ghost-check" style={{ marginTop: 6 }}>
             <input type="checkbox" checked={rectFilled} onChange={(e) => setRectFilled(e.target.checked)} />
-            填充矩形
+            {t("fillRectangle")}
           </label>
         )}
       </aside>
@@ -698,17 +707,17 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
       <section className="card canvas-card">
         <div className="canvas-head">
           <span className="canvas-info">
-            {doc.width} × {doc.height} · 第 {layerIndex + 1}/{doc.layers.length} 层
+            {doc.width} × {doc.height} · {t("layerPosition", { index: layerIndex + 1, count: doc.layers.length })}
           </span>
           <div className="canvas-actions">
             <label className="ghost-check">
               <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />
-              网格
+              {t("canvasGrid")}
             </label>
-            <button type="button" className="btn-ghost icon-btn" onClick={undo} disabled={!canUndo} title="撤销（Ctrl+Z）" aria-label="撤销">
+            <button type="button" className="btn-ghost icon-btn" onClick={undo} disabled={!canUndo} title={`${t("undo")} (Ctrl+Z)`} aria-label={t("undo")}>
               <PixelIcon data={Undo} size={16} />
             </button>
-            <button type="button" className="btn-ghost icon-btn" onClick={redo} disabled={!canRedo} title="重做（Ctrl+Shift+Z）" aria-label="重做">
+            <button type="button" className="btn-ghost icon-btn" onClick={redo} disabled={!canRedo} title={`${t("redo")} (Ctrl+Shift+Z)`} aria-label={t("redo")}>
               <PixelIcon data={Redo} size={16} />
             </button>
           </div>
@@ -726,7 +735,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerCancel={onPointerCancel}
-              aria-label={`像素画布 ${doc.width}×${doc.height}`}
+              aria-label={t("pixelCanvas", { width: doc.width, height: doc.height })}
             />
             <canvas
               ref={overlayRef}
@@ -742,32 +751,30 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
             )}
           </div>
         </div>
-        <p className="shortcut-hint">
-          快捷键：B 铅笔 · E 橡皮 · I 取色 · G 填充 · L 直线 · R 矩形 · [ ] 调整笔刷 · - + 调整缩放 · Ctrl+Z 撤销 · Ctrl+S 保存工程
-        </p>
+        <p className="shortcut-hint">{t("shortcutHint")}</p>
 
         {animation && (
-          <div className="frame-strip" role="toolbar" aria-label="帧动画">
+          <div className="frame-strip" role="toolbar" aria-label={t("frameAnimation")}>
             <div className="frame-controls">
               <button
                 type="button"
                 className="btn-ghost icon-btn"
                 onClick={animation.onTogglePlay}
-                aria-label={animation.playing ? "暂停预览" : "播放预览"}
-                title={animation.playing ? "暂停预览" : "播放预览（空格）"}
+                aria-label={animation.playing ? t("pausePreview") : t("playPreview")}
+                title={animation.playing ? t("pausePreview") : t("playPreviewSpace")}
               >
                 {animation.playing ? "⏸" : "▶"}
               </button>
               <label className="ghost-check">
                 <input type="checkbox" checked={animation.onion} onChange={animation.onToggleOnion} />
-                洋葱皮
+                {t("onionSkin")}
               </label>
-              <label className="ghost-check" title="同时显示下一帧（淡青色）">
+              <label className="ghost-check" title={t("showNextFrameHint")}>
                 <input type="checkbox" checked={animation.onionNext} onChange={animation.onToggleOnionNext} />
-                显示下一帧
+                {t("showNextFrame")}
               </label>
               <label className="fps-label">
-                <span>帧率</span>
+                <span>{t("frameRate")}</span>
                 <input
                   type="number"
                   min={1}
@@ -776,7 +783,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
                   onChange={(e) => animation.onFpsChange(Number(e.target.value))}
                   className="num-input"
                   style={{ width: 54 }}
-                  aria-label="帧率"
+                  aria-label={t("frameRate")}
                 />
               </label>
             </div>
@@ -791,11 +798,11 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
                 />
               ))}
               <div className="frame-ops">
-                <button type="button" className="frame-op" onClick={animation.onFrameAddBlank} title="新建空白帧" aria-label="新建空白帧">＋</button>
-                <button type="button" className="frame-op" onClick={animation.onFrameDuplicate} title="复制当前帧" aria-label="复制当前帧">⧉</button>
-                <button type="button" className="frame-op" onClick={() => animation.onFrameShift(-1)} title="左移" aria-label="左移当前帧">‹</button>
-                <button type="button" className="frame-op" onClick={() => animation.onFrameShift(1)} title="右移" aria-label="右移当前帧">›</button>
-                <button type="button" className="frame-op danger" onClick={animation.onFrameDelete} title="删除当前帧" aria-label="删除当前帧">✕</button>
+                <button type="button" className="frame-op" onClick={animation.onFrameAddBlank} title={t("newBlankFrame")} aria-label={t("newBlankFrame")}>＋</button>
+                <button type="button" className="frame-op" onClick={animation.onFrameDuplicate} title={t("duplicateFrame")} aria-label={t("duplicateFrame")}>⧉</button>
+                <button type="button" className="frame-op" onClick={() => animation.onFrameShift(-1)} title={t("moveLeft")} aria-label={t("moveLeft")}>‹</button>
+                <button type="button" className="frame-op" onClick={() => animation.onFrameShift(1)} title={t("moveRight")} aria-label={t("moveRight")}>›</button>
+                <button type="button" className="frame-op danger" onClick={animation.onFrameDelete} title={t("deleteFrame")} aria-label={t("deleteFrame")}>✕</button>
               </div>
             </div>
           </div>
@@ -806,9 +813,9 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
       <aside className="side-panels">
         <div className="card palette-card">
           <div className="panel-head">
-            <h2 className="card-title">调色板</h2>
+            <h2 className="card-title">{t("palette")}</h2>
           </div>
-          <label className="field-label" htmlFor="palette-select">调色板预设</label>
+          <label className="field-label" htmlFor="palette-select">{t("palettePreset")}</label>
           <select
             id="palette-select"
             className="num-input"
@@ -820,7 +827,9 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
             }}
           >
             {PRESET_PALETTES.map((p) => (
-              <option key={p.name} value={p.name}>{p.name}</option>
+              <option key={p.name} value={p.name}>
+                {p.name === "自动" ? t("paletteAuto") : p.name === "灰度" ? t("paletteGrayscale") : p.name}
+              </option>
             ))}
           </select>
           <div className="palette-grid">
@@ -832,7 +841,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
                 style={{ background: c }}
                 onClick={() => { setColor(c); setColorText(c); }}
                 title={c}
-                aria-label={`颜色 ${c}`}
+                aria-label={t("color", { value: c })}
               />
             ))}
           </div>
@@ -841,7 +850,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
               type="color"
               value={color}
               onChange={(e) => { setColor(e.target.value); setColorText(e.target.value); }}
-              aria-label="选择颜色"
+              aria-label={t("chooseColor")}
               style={{ width: 36, height: 32, border: "none", background: "none", padding: 0 }}
             />
             <input
@@ -854,24 +863,24 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
                 if (rgb) setColor(rgbToHex(rgb[0], rgb[1], rgb[2]));
               }}
               onBlur={() => setColorText(color)}
-              aria-label="颜色 hex 值"
+              aria-label={t("colorHex")}
               aria-invalid={parseHex(colorText) === null}
               spellCheck={false}
             />
           </div>
           {parseHex(colorText) === null && (
             <p style={{ fontSize: 12, color: "var(--amber)", marginTop: 6 }}>
-              hex 无效，仍在使用 {color}
+              {t("invalidHex", { value: color })}
             </p>
           )}
         </div>
 
         <div className="card layers-card">
           <div className="panel-head">
-            <h2 className="card-title">图层</h2>
+            <h2 className="card-title">{t("layers")}</h2>
             <div style={{ display: "flex", gap: 6 }}>
-              <button type="button" className="btn-ghost" onClick={clearLayer}>清空</button>
-              <button type="button" className="btn-ghost" onClick={addLayer}>＋ 新建</button>
+              <button type="button" className="btn-ghost" onClick={clearLayer}>{t("clear")}</button>
+              <button type="button" className="btn-ghost" onClick={addLayer}>{t("newLayer")}</button>
             </div>
           </div>
           <div className="layer-list">
@@ -885,23 +894,23 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
                   type="button"
                   className="layer-eye"
                   onClick={(e) => { e.stopPropagation(); toggleLayer(i); }}
-                  title={l.visible ? "隐藏图层" : "显示图层"}
-                  aria-label={l.visible ? `隐藏 ${l.name}` : `显示 ${l.name}`}
+                  title={l.visible ? t("hideLayer") : t("showLayer")}
+                  aria-label={l.visible ? `${t("hideLayer")} ${localizeLayerName(l.name)}` : `${t("showLayer")} ${localizeLayerName(l.name)}`}
                 >
                   {l.visible ? "◉" : "○"}
                 </button>
-                <span className="layer-name">{l.name}</span>
+                <span className="layer-name">{localizeLayerName(l.name)}</span>
                 <input
                   type="range" min={0} max={100} value={Math.round(l.opacity * 100)}
                   onChange={(e) => setLayerOpacity(i, Number(e.target.value) / 100)}
                   onClick={(e) => e.stopPropagation()}
-                  title={`不透明度 ${Math.round(l.opacity * 100)}%`}
-                  aria-label={`${l.name} 不透明度`}
+                  title={t("opacity", { value: Math.round(l.opacity * 100) })}
+                  aria-label={`${localizeLayerName(l.name)} ${t("opacity", { value: Math.round(l.opacity * 100) })}`}
                 />
                 <div className="layer-actions">
-                  <button type="button" className="mini-btn" onClick={(e) => { e.stopPropagation(); moveLayer(i, 1); }} title="上移" aria-label="上移图层">↑</button>
-                  <button type="button" className="mini-btn" onClick={(e) => { e.stopPropagation(); moveLayer(i, -1); }} title="下移" aria-label="下移图层">↓</button>
-                  <button type="button" className="mini-btn danger icon-btn" onClick={(e) => { e.stopPropagation(); removeLayer(i); }} title="删除图层" aria-label={`删除 ${l.name}`}>
+                  <button type="button" className="mini-btn" onClick={(e) => { e.stopPropagation(); moveLayer(i, 1); }} title={t("moveUp")} aria-label={t("moveUp")}>↑</button>
+                  <button type="button" className="mini-btn" onClick={(e) => { e.stopPropagation(); moveLayer(i, -1); }} title={t("moveDown")} aria-label={t("moveDown")}>↓</button>
+                  <button type="button" className="mini-btn danger icon-btn" onClick={(e) => { e.stopPropagation(); removeLayer(i); }} title={t("removeLayer")} aria-label={`${t("removeLayer")} ${localizeLayerName(l.name)}`}>
                     <PixelIcon data={Trash} size={13} />
                   </button>
                 </div>
@@ -911,36 +920,36 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
         </div>
 
         <div className="card canvas-tools-card">
-          <h2 className="card-title">画布尺寸</h2>
+          <h2 className="card-title">{t("canvasSize")}</h2>
           <div className="size-row">
-            <label className="sr-only" htmlFor="canvas-w">宽度</label>
+            <label className="sr-only" htmlFor="canvas-w">{t("width")}</label>
             <input id="canvas-w" className="num-input" type="number" min={1} max={512} value={sizeW}
               onChange={(e) => setSizeW(clampSize(Number(e.target.value)))} />
             <span aria-hidden="true">×</span>
-            <label className="sr-only" htmlFor="canvas-h">高度</label>
+            <label className="sr-only" htmlFor="canvas-h">{t("height")}</label>
             <input id="canvas-h" className="num-input" type="number" min={1} max={512} value={sizeH}
               onChange={(e) => setSizeH(clampSize(Number(e.target.value)))} />
           </div>
           <div className="size-row">
-            <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={applyResize}>调整（保留内容）</button>
-            <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={newCanvas}>新建空白</button>
+            <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={applyResize}>{t("resizeKeepContent")}</button>
+            <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={newCanvas}>{t("newBlankCanvas")}</button>
           </div>
 
           <div className="tool-divider" />
-          <h2 className="card-title">导出与工程</h2>
+          <h2 className="card-title">{t("exportAndProject")}</h2>
           <div className="size-row">
-            <label className="field-label" style={{ margin: 0 }} htmlFor="export-scale">放大</label>
+            <label className="field-label" style={{ margin: 0 }} htmlFor="export-scale">{t("upscale")}</label>
             <select id="export-scale" className="num-input" style={{ flex: 1 }} value={exportScale} onChange={(e) => setExportScale(Number(e.target.value))}>
               {[1, 2, 4, 8, 16].map((s) => <option key={s} value={s}>{s}×</option>)}
             </select>
-            <button type="button" className="btn-primary" onClick={exportPng}>导出 PNG</button>
+            <button type="button" className="btn-primary" onClick={exportPng}>{t("exportPng")}</button>
           </div>
           <div className="size-row">
             <button type="button" className="btn-ghost icon-text-btn" style={{ flex: 1 }} onClick={saveProject}>
-              <PixelIcon data={Download} size={14} /> 保存工程
+              <PixelIcon data={Download} size={14} /> {t("saveProject")}
             </button>
             <button type="button" className="btn-ghost icon-text-btn" style={{ flex: 1 }} onClick={() => projectInputRef.current?.click()}>
-              <PixelIcon data={Upload} size={14} /> 打开工程
+              <PixelIcon data={Upload} size={14} /> {t("openProject")}
             </button>
             <input
               ref={projectInputRef}
@@ -955,7 +964,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
             />
           </div>
           <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
-            工程含图层信息，可再次打开继续编辑；画布内容也会自动存本地草稿。
+            {t("projectHint")}
           </p>
         </div>
       </aside>

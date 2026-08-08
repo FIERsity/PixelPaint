@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PixelDoc } from "../lib/pixelDoc";
 import { docFromPixels } from "../lib/pixelDoc";
 import { normalizeCutoutBlob, type CutoutEdgeMode } from "../lib/cutout";
+import { useI18n } from "../lib/i18n";
 
 interface CutoutProps {
   inputFile: File | null;
@@ -15,6 +16,7 @@ interface CutoutProps {
 type Phase = "idle" | "ready" | "running" | "done" | "error";
 
 export default function Cutout({ inputFile, resultFile, onResult, onImport, onReturnToPixel, onNotice }: CutoutProps) {
+  const { t } = useI18n();
   const [phase, setPhase] = useState<Phase>(inputFile ? "ready" : "idle");
   const [progress, setProgress] = useState<{ label: string; pct: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +45,7 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
     runningRef.current = true;
     setPhase("running");
     setError(null);
-    setProgress({ label: "准备中…", pct: 0 });
+    setProgress({ label: t("prepare"), pct: 0 });
     try {
       // 懒加载背景处理模型（首次会下载约 40MB，之后由浏览器缓存）。
       const { removeBackground } = await import("@imgly/background-removal");
@@ -52,15 +54,15 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
         output: { format: "image/png" },
         progress: (key, current, total) => {
           if (runId !== runIdRef.current) return;
-          let label = "处理中…";
-          if (key.includes("fetch")) label = "下载模型…";
-          else if (key.includes("compute")) label = "处理背景…";
+          let label = t("processing");
+          if (key.includes("fetch")) label = t("downloadingModel");
+          else if (key.includes("compute")) label = t("processingBackground");
           const pct = total > 0 ? Math.round((current / total) * 100) : 0;
           setProgress({ label, pct: Math.max(1, Math.min(99, pct)) });
         },
       });
       if (runId !== runIdRef.current) return;
-      setProgress({ label: "整理像素边缘…", pct: 99 });
+      setProgress({ label: t("cleanEdges"), pct: 99 });
       const normalized = await normalizeCutoutBlob(inputFile, blob, { mode: edgeMode, threshold });
       if (runId !== runIdRef.current) return;
       const base = inputFile.name.replace(/\.[^.]+$/, "") || "pixelpaint";
@@ -68,11 +70,11 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
       onResult(file);
       setProgress(null);
       setPhase("done");
-      onNotice?.(`背景处理完成 · ${edgeMode === "hard" ? "像素硬边" : "柔和边缘"}`);
+      onNotice?.(t("backgroundDone", { mode: edgeMode === "hard" ? t("hardEdgeShort") : t("softEdgeShort") }));
     } catch (err) {
       if (runId !== runIdRef.current) return;
       console.error(err);
-      setError("背景处理失败，可能是模型下载被拦截或图片无法处理。请重试。");
+      setError(t("backgroundError"));
       setPhase("error");
     } finally {
       if (runId === runIdRef.current) runningRef.current = false;
@@ -87,13 +89,13 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
       canvas.width = bitmap.width;
       canvas.height = bitmap.height;
       const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("无法创建结果画布");
+      if (!ctx) throw new Error(t("resultCanvasError"));
       ctx.drawImage(bitmap, 0, 0);
       bitmap.close();
       const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      onImport(docFromPixels(image.data, image.width, image.height, "背景处理"));
+      onImport(docFromPixels(image.data, image.width, image.height, t("background")));
     } catch {
-      setError("无法把结果发送到画板，请重试。");
+      setError(t("sendBackgroundError"));
     }
   };
 
@@ -109,18 +111,18 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
 
   return (
     <div className="operation-panel">
-      <h2 className="card-title">背景处理设置</h2>
-      <p className="card-desc">处理当前像素化结果，保留透明区域并整理像素边缘。</p>
+      <h2 className="card-title">{t("backgroundSettings")}</h2>
+      <p className="card-desc">{t("backgroundDescription")}</p>
       <div className="tool-divider" />
 
       {!inputFile && (
         <div className="operation-empty" role="status">
-          完成转像素后，这里会处理当前结果。
+          {t("backgroundEmpty")}
         </div>
       )}
 
       <div className="param-row">
-        <label htmlFor="cutout-model">模型精度</label>
+        <label htmlFor="cutout-model">{t("modelPrecision")}</label>
         <select
           id="cutout-model"
           className="num-input"
@@ -128,14 +130,14 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
           value={model}
           onChange={(e) => setModel(e.target.value as "isnet" | "isnet_quint8")}
         >
-          <option value="isnet_quint8">快速（量化，约 40MB）</option>
-          <option value="isnet">精细（ISNet，较慢）</option>
+          <option value="isnet_quint8">{t("fastModel")}</option>
+          <option value="isnet">{t("preciseModel")}</option>
         </select>
-        <p className="field-hint">首次使用需下载模型，之后浏览器会缓存。</p>
+        <p className="field-hint">{t("modelHint")}</p>
       </div>
 
       <div className="param-row">
-        <label htmlFor="cutout-edge">边缘处理</label>
+        <label htmlFor="cutout-edge">{t("edgeProcessing")}</label>
         <select
           id="cutout-edge"
           className="num-input"
@@ -143,16 +145,16 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
           value={edgeMode}
           onChange={(e) => setEdgeMode(e.target.value as CutoutEdgeMode)}
         >
-          <option value="hard">像素硬边（推荐）</option>
-          <option value="soft">柔和边缘</option>
+          <option value="hard">{t("hardEdge")}</option>
+          <option value="soft">{t("softEdge")}</option>
         </select>
-        <p className="field-hint">硬边会把半透明边缘整理为透明或不透明像素。</p>
+        <p className="field-hint">{t("edgeHint")}</p>
       </div>
 
       {edgeMode === "hard" && (
         <div className="param-row">
           <label htmlFor="cutout-threshold">
-            硬边阈值 <span className="range-val">{threshold}</span>
+            {t("hardThreshold")} <span className="range-val">{threshold}</span>
           </label>
           <input
             id="cutout-threshold"
@@ -163,7 +165,7 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
             value={threshold}
             onChange={(e) => setThreshold(Number(e.target.value))}
           />
-          <p className="field-hint">数值越高，保留的主体边缘越少。</p>
+          <p className="field-hint">{t("thresholdHint")}</p>
         </div>
       )}
 
@@ -182,15 +184,15 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
         disabled={!inputFile || phase === "running"}
         onClick={run}
       >
-        {phase === "running" ? "处理中…" : "开始处理背景"}
+        {phase === "running" ? t("processing") : t("startBackground")}
       </button>
 
       {phase === "done" && resultFile && (
         <div className="operation-result-actions">
           <div className="tool-divider" />
-          <button type="button" className="btn-primary" onClick={sendToCanvas}>发送到画板</button>
-          <button type="button" className="btn-ghost" onClick={() => onReturnToPixel(resultFile)}>返回转像素</button>
-          <button type="button" className="btn-ghost" onClick={download}>下载 PNG</button>
+          <button type="button" className="btn-primary" onClick={sendToCanvas}>{t("sendToCanvas")}</button>
+          <button type="button" className="btn-ghost" onClick={() => onReturnToPixel(resultFile)}>{t("returnToPixel")}</button>
+          <button type="button" className="btn-ghost" onClick={download}>{t("downloadPng")}</button>
         </div>
       )}
     </div>

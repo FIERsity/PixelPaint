@@ -8,13 +8,14 @@ import type { DitherMode, ToPixelOptions } from "../lib/pixel";
 import type { ToPixelRequest, ToPixelResponse } from "../lib/toPixel.worker";
 import { clampDimension, normalizeDimensionDraft, parseDimensionDraft } from "../lib/dimensions";
 import { pixelsToPngFile } from "../lib/imageTransfer";
+import { useI18n } from "../lib/i18n";
 
 const SIZE_PRESETS = [
-  { value: "16", label: "16 px（按比例）" },
-  { value: "32", label: "32 px（按比例）" },
-  { value: "64", label: "64 px（按比例）" },
-  { value: "128", label: "128 px（按比例）" },
-  { value: "256", label: "256 px（按比例）" },
+  { value: "16", labelKey: "size16" },
+  { value: "32", labelKey: "size32" },
+  { value: "64", labelKey: "size64" },
+  { value: "128", labelKey: "size128" },
+  { value: "256", labelKey: "size256" },
 ] as const;
 
 type SizePreset = (typeof SIZE_PRESETS)[number]["value"] | "custom";
@@ -38,6 +39,7 @@ interface Result {
 }
 
 export default function Convert({ onImport, onNotice }: ConvertProps) {
+  const { t } = useI18n();
   const [source, setSource] = useState<Source | null>(null);
   const [outW, setOutW] = useState(32);
   const [outH, setOutH] = useState(32);
@@ -167,7 +169,7 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
       canvas.width = bitmap.width;
       canvas.height = bitmap.height;
       const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("无法创建图片画布");
+      if (!ctx) throw new Error(t("createCanvasError"));
       ctx.drawImage(bitmap, 0, 0);
       bitmap.close();
       const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -180,11 +182,11 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
       setAutoPalette([]);
       setOperation("pixelate");
       clearBackgroundState();
-      onNotice?.(`已读取 ${file.name}（${image.width}×${image.height}）`);
+      onNotice?.(t("readImageNotice", { name: file.name, width: image.width, height: image.height }));
     } catch {
-      setError("无法读取该图片，请换一张试试。");
+      setError(t("readImageError"));
     }
-  }, [clearBackgroundState, onNotice, setOutputDimensions]);
+  }, [clearBackgroundState, onNotice, setOutputDimensions, t]);
 
   const onWidthDraft = (raw: string) => {
     setWidthDraft(raw);
@@ -238,14 +240,14 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
   const chosenPalette: Palette = PRESET_PALETTES.find((p) => p.name === paletteName) ?? NO_PALETTE;
   const paletteLocked = chosenPalette.colors.length > 0;
   const sourceCardTitle = operation === "background"
-    ? result ? "当前像素化结果" : "先选择图片开始转像素"
-    : "选择图片或拖拽到这里";
+    ? result ? t("currentPixelResult") : t("startPixelize")
+    : t("chooseImage");
   const sourceCardHint = operation === "background"
-    ? result ? `点击可更换图片 · 当前结果 ${result.w}×${result.h} px` : "选择图片后会先完成转像素"
-    : "支持 JPG / PNG / WebP · 全程在浏览器本地处理";
+    ? result ? t("changeImageHint", { width: result.w, height: result.h }) : t("startPixelizeHint")
+    : t("imageHint");
   const sourceCardLabel = operation === "background" && result
-    ? "更换用于处理背景的图片"
-    : "选择或拖放要处理的图片";
+    ? t("changeBackgroundImage")
+    : t("chooseImageAria");
 
   const enterBackground = async () => {
     setOperation("background");
@@ -254,12 +256,12 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
     setError(null);
     try {
       const file = await pixelsToPngFile(result.pixels, result.w, result.h, "pixelpaint-converted.png");
-      if (!file) throw new Error("无法生成 PNG");
+      if (!file) throw new Error(t("createPngError"));
       setBackgroundInput(file);
       replaceBackgroundResult(null);
-      onNotice?.("已切换到处理背景");
+      onNotice?.(t("switchToBackground"));
     } catch {
-      setError("无法准备背景处理，请重试。");
+      setError(t("prepareBackgroundError"));
     } finally {
       setSending(false);
     }
@@ -268,18 +270,18 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
   const returnToPixel = (file: File) => {
     setOperation("pixelate");
     void loadFile(file);
-    onNotice?.("已返回转像素");
+    onNotice?.(t("returnToPixelize"));
   };
 
   return (
     <div className="convert-workbench">
       <div className="workbench-head">
         <div>
-          <p className="eyebrow">图片处理</p>
-          <h1 className="workbench-title">转像素</h1>
-          <p className="workbench-desc">把图片变成可编辑的像素画，也可以处理当前结果的透明背景。</p>
+          <p className="eyebrow">{t("imageProcessing")}</p>
+          <h1 className="workbench-title">{t("pixelize")}</h1>
+          <p className="workbench-desc">{t("pixelizeDescription")}</p>
         </div>
-        <div className="operation-switcher" role="tablist" aria-label="图片处理操作">
+        <div className="operation-switcher" role="tablist" aria-label={t("imageProcessingOperations")}>
           <button
             type="button"
             role="tab"
@@ -287,7 +289,7 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
             className={`operation-tab ${operation === "pixelate" ? "active" : ""}`}
             onClick={() => setOperation("pixelate")}
           >
-            转像素
+            {t("pixelize")}
           </button>
           <button
             type="button"
@@ -296,7 +298,7 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
             className={`operation-tab ${operation === "background" ? "active" : ""}`}
             onClick={() => void enterBackground()}
           >
-            处理背景
+            {t("background")}
           </button>
         </div>
       </div>
@@ -333,7 +335,7 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
             <div className="source-card-copy">
               <div className="drop-icon" aria-hidden="true">↑</div>
               <div>
-                <p className="drop-title">{sourceCardTitle}</p>
+                  <p className="drop-title">{sourceCardTitle}</p>
                 <p className="drop-hint">{sourceCardHint}</p>
               </div>
             </div>
@@ -351,19 +353,19 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
         <aside className="card operation-card">
           {operation === "pixelate" ? (
             <div className="operation-panel">
-              <h2 className="card-title">转像素设置</h2>
+              <h2 className="card-title">{t("pixelizeSettings")}</h2>
               <div className="tool-divider" />
 
               <div className="param-row">
-                <label htmlFor="size-preset">输出尺寸 <span className="range-val">{outW}×{outH}</span></label>
+                <label htmlFor="size-preset">{t("outputSize")} <span className="range-val">{outW}×{outH}</span></label>
                 <select
                   id="size-preset"
                   className="num-input"
                   value={sizePreset}
                   onChange={(e) => onSizePreset(e.target.value as SizePreset)}
                 >
-                  {SIZE_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}
-                  <option value="custom">自定义</option>
+                  {SIZE_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{t(preset.labelKey)}</option>)}
+                  <option value="custom">{t("custom")}</option>
                 </select>
                 {sizePreset === "custom" && (
                   <div className="size-row output-size-row">
@@ -376,7 +378,7 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
                       value={widthDraft}
                       onChange={(e) => onWidthDraft(e.target.value)}
                       onBlur={() => onSizeBlur("width")}
-                      aria-label="输出宽度"
+                      aria-label={t("width")}
                       aria-describedby="output-size-hint"
                     />
                     <span aria-hidden="true">×</span>
@@ -389,20 +391,20 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
                       value={heightDraft}
                       onChange={(e) => onHeightDraft(e.target.value)}
                       onBlur={() => onSizeBlur("height")}
-                      aria-label="输出高度"
+                      aria-label={t("height")}
                       aria-describedby="output-size-hint"
                     />
                   </div>
                 )}
                 <label className="ghost-check inline-check" style={{ marginTop: 6 }}>
                   <input type="checkbox" checked={lockRatio} onChange={(e) => setLockRatio(e.target.checked)} />
-                  保持原图比例
+                  {t("keepRatio")}
                 </label>
-                {sizePreset === "custom" && <p id="output-size-hint" className="field-hint">范围 1–512；清空时不会立即改动当前结果。</p>}
+                {sizePreset === "custom" && <p id="output-size-hint" className="field-hint">{t("outputSizeHint")}</p>}
               </div>
 
               <div className="param-row">
-                <label htmlFor="max-colors">颜色数 <span className="range-val">{paletteLocked ? "由调色板决定" : maxColors}</span></label>
+                <label htmlFor="max-colors">{t("colorCount")} <span className="range-val">{paletteLocked ? t("paletteDecided") : maxColors}</span></label>
                 <input
                   id="max-colors"
                   type="range"
@@ -412,11 +414,11 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
                   onChange={(e) => setMaxColors(Number(e.target.value))}
                   disabled={paletteLocked}
                 />
-                {paletteLocked && <p className="field-hint">已选固定调色板（{chosenPalette.colors.length} 色）。</p>}
+                {paletteLocked && <p className="field-hint">{t("fixedPaletteHint", { count: chosenPalette.colors.length })}</p>}
               </div>
 
               <div className="param-row">
-                <label htmlFor="palette-pick">调色板</label>
+                <label htmlFor="palette-pick">{t("palette")}</label>
                 <select
                   id="palette-pick"
                   className="num-input"
@@ -424,7 +426,11 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
                   value={paletteName}
                   onChange={(e) => setPaletteName(e.target.value)}
                 >
-                  {PRESET_PALETTES.map((palette) => <option key={palette.name} value={palette.name}>{palette.name}</option>)}
+                  {PRESET_PALETTES.map((palette) => (
+                    <option key={palette.name} value={palette.name}>
+                      {palette.name === NO_PALETTE.name ? t("paletteAuto") : palette.name === "灰度" ? t("paletteGrayscale") : palette.name}
+                    </option>
+                  ))}
                 </select>
                 {chosenPalette.colors.length > 0 && (
                   <div className="preset-swatches">
@@ -433,7 +439,7 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
                 )}
                 {paletteName === NO_PALETTE.name && (
                   <>
-                    <p className="field-hint">{autoPalette.length > 0 ? `已从当前图片提取 ${autoPalette.length} 色` : "上传图片后自动提取颜色"}</p>
+                    <p className="field-hint">{autoPalette.length > 0 ? t("paletteExtracted", { count: autoPalette.length }) : t("paletteAutoHint")}</p>
                     {autoPalette.length > 0 && (
                       <div className="palette-grid auto-palette-grid">
                         {autoPalette.map((color) => <span key={color} className="swatch" style={{ background: color }} title={color} />)}
@@ -444,7 +450,7 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
               </div>
 
               <div className="param-row">
-                <label htmlFor="dither-pick">抖动</label>
+                <label htmlFor="dither-pick">{t("dither")}</label>
                 <select
                   id="dither-pick"
                   className="num-input"
@@ -452,11 +458,11 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
                   value={dither}
                   onChange={(e) => setDither(e.target.value as DitherMode)}
                 >
-                  <option value="none">无</option>
-                  <option value="floyd">Floyd-Steinberg</option>
-                  <option value="atkinson">Atkinson</option>
-                  <option value="bayer2">Bayer 2×2</option>
-                  <option value="bayer4">Bayer 4×4</option>
+                  <option value="none">{t("noDither")}</option>
+                  <option value="floyd">{t("floyd")}</option>
+                  <option value="atkinson">{t("atkinson")}</option>
+                  <option value="bayer2">{t("bayer2")}</option>
+                  <option value="bayer4">{t("bayer4")}</option>
                 </select>
               </div>
 
@@ -466,13 +472,13 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
                   className="btn-primary"
                   disabled={!result || busy}
                   onClick={() => {
-                    if (result) onImport(docFromPixels(result.pixels, result.w, result.h, "像素化"));
+                    if (result) onImport(docFromPixels(result.pixels, result.w, result.h, t("pixelize")));
                   }}
                 >
-                  {busy ? "转换中…" : "发送到画板"}
+                  {busy ? t("converting") : t("sendToCanvas")}
                 </button>
                 <button type="button" className="btn-ghost" disabled={!result || busy || sending} onClick={() => void enterBackground()}>
-                  {sending ? "准备中…" : "处理背景"}
+                  {sending ? t("prepare") : t("background")}
                 </button>
               </div>
             </div>
