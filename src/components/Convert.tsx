@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PixelDoc } from "../lib/pixelDoc";
 import { docFromPixels } from "../lib/pixelDoc";
+import Cutout from "./Cutout";
 import { NO_PALETTE, PRESET_PALETTES, rgbToHex, type Palette } from "../lib/palette";
 import type { DitherMode, ToPixelOptions } from "../lib/pixel";
 import type { ToPixelRequest, ToPixelResponse } from "../lib/toPixel.worker";
@@ -20,9 +21,6 @@ type SizePreset = (typeof SIZE_PRESETS)[number]["value"] | "custom";
 interface ConvertProps {
   onImport: (doc: PixelDoc) => void;
   onNotice?: (msg: string) => void;
-  onSendToCutout: (file: File) => void;
-  incomingImage?: ImageTransfer | null;
-  onIncomingConsumed?: (id: number) => void;
 }
 
 interface Source {
@@ -38,7 +36,7 @@ interface Result {
   h: number;
 }
 
-export default function Convert({ onImport, onNotice, onSendToCutout, incomingImage, onIncomingConsumed }: ConvertProps) {
+export default function Convert({ onImport, onNotice }: ConvertProps) {
   const [source, setSource] = useState<Source | null>(null);
   const [outW, setOutW] = useState(32);
   const [outH, setOutH] = useState(32);
@@ -53,6 +51,8 @@ export default function Convert({ onImport, onNotice, onSendToCutout, incomingIm
   const [error, setError] = useState<string | null>(null);
   const [dragover, setDragover] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
+  const [cutoutOpen, setCutoutOpen] = useState(false);
+  const [cutoutInput, setCutoutInput] = useState<ImageTransfer | null>(null);
 
   const previewRef = useRef<HTMLCanvasElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -60,6 +60,7 @@ export default function Convert({ onImport, onNotice, onSendToCutout, incomingIm
   const reqId = useRef(0);
   // 每个请求自带尺寸，避免用“最新参数”错配旧结果导致崩溃/花屏
   const pending = useRef(new Map<number, { w: number; h: number; auto: boolean }>());
+  const cutoutIdRef = useRef(0);
   const sourceRef = useRef<Source | null>(null);
   sourceRef.current = source;
   const optsRef = useRef<ToPixelOptions | null>(null);
@@ -163,6 +164,7 @@ export default function Convert({ onImport, onNotice, onSendToCutout, incomingIm
       bitmap.close();
       const img = ctx.getImageData(0, 0, c.width, c.height);
       setSource({ data: img.data, w: img.width, h: img.height, name: file.name });
+      setResult(null);
       const w = 32;
       const h = Math.max(1, Math.round((32 * img.height) / img.width));
       setOutW(w);
@@ -208,13 +210,6 @@ export default function Convert({ onImport, onNotice, onSendToCutout, incomingIm
     if (f) loadFile(f);
   };
 
-  // 从抠图模块流转过来的图片，作为新的输入载入。
-  useEffect(() => {
-    if (!incomingImage) return;
-    void loadFile(incomingImage.file);
-    onIncomingConsumed?.(incomingImage.id);
-  }, [incomingImage, loadFile, onIncomingConsumed]);
-
   const chosenPalette: Palette = PRESET_PALETTES.find((p) => p.name === paletteName) ?? NO_PALETTE;
   const paletteLocked = chosenPalette.colors.length > 0;
   // 预览放大：小画布放大到可读尺寸（最长边约 420px），不超过 20×
@@ -230,90 +225,100 @@ export default function Convert({ onImport, onNotice, onSendToCutout, incomingIm
     try {
       const file = await pixelsToPngFile(result.pixels, result.w, result.h, "pixelpaint-converted.png");
       if (!file) throw new Error("无法生成 PNG");
-      onSendToCutout(file);
+      setCutoutInput({ id: ++cutoutIdRef.current, file });
+      setCutoutOpen(true);
+      onNotice?.("已进入下一步：处理背景");
     } catch {
-      setError("无法把结果送入抠图，请重试。");
+      setError("无法准备背景处理，请重试。");
     } finally {
       setSending(false);
     }
   };
 
+  const sendCutoutToConvert = useCallback((file: File) => {
+    setCutoutOpen(false);
+    setCutoutInput(null);
+    void loadFile(file);
+    onNotice?.("背景处理结果已送回转像素");
+  }, [loadFile, onNotice]);
+
   return (
-    <div className="convert-layout">
-      <section>
-        {/* 上传 */}
-        <div
-          className={`card drop-card ${dragover ? "dragover" : ""}`}
-          onClick={() => inputRef.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setDragover(true); }}
-          onDragLeave={() => setDragover(false)}
-          onDrop={handleDrop}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              inputRef.current?.click();
-            }
-          }}
-          role="button"
-          tabIndex={0}
-          aria-label="选择或拖放要转像素的图片"
-        >
-          <input
-            ref={inputRef}
-            type="file"
-            accept="image/*"
-            hidden
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) loadFile(f); e.target.value = ""; }}
-          />
-          <div className="drop-inner">
-            <div className="drop-icon">
-              <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="17 8 12 3 7 8" />
-                <line x1="12" y1="3" x2="12" y2="15" />
-              </svg>
-            </div>
-            <p className="drop-title">点击选择或拖拽图片</p>
-            <p className="drop-hint">支持 JPG / PNG / WebP，将转换为像素画</p>
-          </div>
-        </div>
-
-        {/* 预览 */}
-        <div className="card">
-          <div className="panel-head">
-            <h2 className="card-title">预览</h2>
-            {result && <span className="badge">{result.w} × {result.h} px</span>}
-          </div>
-          {result ? (
-            <div className="preview-box">
-              <div
-                className="pixel-preview checker"
-                style={{ width: result.w * previewScale, height: result.h * previewScale, ...previewChecker }}
-              >
-                <canvas
-                  ref={previewRef}
-                  className="pixelated"
-                  style={{
-                    imageRendering: "pixelated",
-                    width: result.w * previewScale,
-                    height: result.h * previewScale,
-                  }}
-                />
+    <div>
+      <div className="convert-layout">
+        <section>
+          {/* 上传 */}
+          <div
+            className={`card drop-card ${dragover ? "dragover" : ""}`}
+            onClick={() => inputRef.current?.click()}
+            onDragOver={(e) => { e.preventDefault(); setDragover(true); }}
+            onDragLeave={() => setDragover(false)}
+            onDrop={handleDrop}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                inputRef.current?.click();
+              }
+            }}
+            role="button"
+            tabIndex={0}
+            aria-label="选择或拖放要转像素的图片"
+          >
+            <input
+              ref={inputRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) loadFile(f); e.target.value = ""; }}
+            />
+            <div className="drop-inner">
+              <div className="drop-icon">
+                <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
               </div>
+              <p className="drop-title">点击选择或拖拽图片</p>
+              <p className="drop-hint">支持 JPG / PNG / WebP，将转换为像素画</p>
             </div>
-          ) : (
-            <div className="preview-box checker" style={{ color: "var(--muted)", fontSize: 13 }}>上传图片后在此预览像素化结果</div>
-          )}
-          {busy && <div className="progress"><div style={{ width: "100%" }} /></div>}
-          {error && <p style={{ color: "var(--red)", fontSize: 13, marginTop: 8 }}>{error}</p>}
-        </div>
-      </section>
+          </div>
 
-      {/* 参数 */}
-      <aside>
-        <div className="card">
-          <h2 className="card-title">像素化参数</h2>
-          <div className="tool-divider" />
+          {/* 预览 */}
+          <div className="card">
+            <div className="panel-head">
+              <h2 className="card-title">预览</h2>
+              {result && <span className="badge">{result.w} × {result.h} px</span>}
+            </div>
+            {result ? (
+              <div className="preview-box">
+                <div
+                  className="pixel-preview checker"
+                  style={{ width: result.w * previewScale, height: result.h * previewScale, ...previewChecker }}
+                >
+                  <canvas
+                    ref={previewRef}
+                    className="pixelated"
+                    style={{
+                      imageRendering: "pixelated",
+                      width: result.w * previewScale,
+                      height: result.h * previewScale,
+                    }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="preview-box checker" style={{ color: "var(--muted)", fontSize: 13 }}>上传图片后在此预览像素化结果</div>
+            )}
+            {busy && <div className="progress"><div style={{ width: "100%" }} /></div>}
+            {error && <p style={{ color: "var(--red)", fontSize: 13, marginTop: 8 }}>{error}</p>}
+          </div>
+        </section>
+
+        {/* 参数 */}
+        <aside>
+          <div className="card">
+            <h2 className="card-title">像素化参数</h2>
+            <div className="tool-divider" />
 
           <div className="param-row">
             <label htmlFor="size-preset">输出尺寸 <span className="range-val">{outW}×{outH}</span></label>
@@ -426,13 +431,43 @@ export default function Convert({ onImport, onNotice, onSendToCutout, incomingIm
             disabled={!result || busy || sending}
             onClick={sendToCutout}
           >
-            {sending ? "准备中…" : "发送到抠图"}
+            {sending ? "准备中…" : "下一步：处理背景"}
           </button>
           <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
-            结果会作为新画布进入「画板」继续编辑
+            可先处理背景，再回到转像素或发送到画板
           </p>
-        </div>
-      </aside>
+          </div>
+        </aside>
+      </div>
+
+      {cutoutOpen && (
+        <section className="workflow-step" aria-labelledby="cutout-step-title">
+          <div className="workflow-step-head">
+            <div>
+              <p className="step-kicker">下一步</p>
+              <h2 id="cutout-step-title" className="card-title">处理背景</h2>
+            </div>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => {
+                setCutoutOpen(false);
+                setCutoutInput(null);
+              }}
+            >
+              收起
+            </button>
+          </div>
+          <Cutout
+            embedded
+            onImport={onImport}
+            onNotice={onNotice}
+            onSendToConvert={sendCutoutToConvert}
+            incomingImage={cutoutInput}
+            onIncomingConsumed={(id) => setCutoutInput((pending) => pending?.id === id ? null : pending)}
+          />
+        </section>
+      )}
     </div>
   );
 }

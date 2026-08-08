@@ -1,20 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Editor from "./components/Editor";
 import Convert from "./components/Convert";
-import Cutout from "./components/Cutout";
 import {
   addFrame, clampIndex, createAnim, deleteFrame, moveFrame, type PixelAnim,
 } from "./lib/anim";
 import { composite, type PixelDoc } from "./lib/pixelDoc";
 import { clearAutosave, downloadProject, loadAutosave, readProjectFile, saveAutosave } from "./lib/persist";
-import type { ImageTransfer } from "./lib/imageTransfer";
 
-type Tab = "editor" | "convert" | "cutout";
+type Tab = "editor" | "convert";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "editor", label: "画板" },
   { id: "convert", label: "转像素" },
-  { id: "cutout", label: "抠图" },
 ];
 
 function BrandIcon() {
@@ -46,11 +43,8 @@ export default function App() {
   const [onion, setOnion] = useState(false);
   const [onionNext, setOnionNext] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [pendingConvertImage, setPendingConvertImage] = useState<ImageTransfer | null>(null);
-  const [pendingCutoutImage, setPendingCutoutImage] = useState<ImageTransfer | null>(null);
   const restoringRef = useRef(true);
   const noticeTimer = useRef<number | undefined>(undefined);
-  const transferIdRef = useRef(0);
 
   const showNotice = useCallback((msg: string) => {
     setNotice(msg);
@@ -165,26 +159,6 @@ export default function App() {
     showNotice(`已送入画板 ${next.width}×${next.height}`);
   }, [doc, frameIndex, showNotice]);
 
-  const sendToConvert = useCallback((file: File) => {
-    setPendingConvertImage({ id: ++transferIdRef.current, file });
-    setTab("convert");
-    showNotice("已送入转像素");
-  }, [showNotice]);
-
-  const sendToCutout = useCallback((file: File) => {
-    setPendingCutoutImage({ id: ++transferIdRef.current, file });
-    setTab("cutout");
-    showNotice("已送入抠图");
-  }, [showNotice]);
-
-  const consumeConvertImage = useCallback((id: number) => {
-    setPendingConvertImage((pending) => pending?.id === id ? null : pending);
-  }, []);
-
-  const consumeCutoutImage = useCallback((id: number) => {
-    setPendingCutoutImage((pending) => pending?.id === id ? null : pending);
-  }, []);
-
   const startOver = () => {
     if (!confirm("清空画布并删除本地草稿？")) return;
     clearAutosave();
@@ -233,7 +207,7 @@ export default function App() {
             <div className="brand-icon"><BrandIcon /></div>
             <div>
               <h1>Pixel<span className="brand-sub">Paint</span></h1>
-              <p className="tagline">在线像素画工作站 · 画 / 转 / 抠 · 帧动画</p>
+              <p className="tagline">在线像素画工作站 · 画 / 转 / 精修 · 帧动画</p>
             </div>
           </div>
           <div className="header-actions">
@@ -295,20 +269,6 @@ export default function App() {
             <Convert
               onImport={handleImport}
               onNotice={showNotice}
-              onSendToCutout={sendToCutout}
-              incomingImage={pendingConvertImage}
-              onIncomingConsumed={consumeConvertImage}
-            />
-          </div>
-        )}
-        {tab === "cutout" && (
-          <div role="tabpanel" id="panel-cutout" aria-labelledby="tab-cutout">
-            <Cutout
-              onImport={handleImport}
-              onNotice={showNotice}
-              onSendToConvert={sendToConvert}
-              incomingImage={pendingCutoutImage}
-              onIncomingConsumed={consumeCutoutImage}
             />
           </div>
         )}

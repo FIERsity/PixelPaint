@@ -314,12 +314,27 @@ button { font-family: inherit; }
 .canvas-tools-card .size-row { margin-bottom: 12px; }
 .canvas-tools-card .size-row:last-child { margin-bottom: 0; }
 
-/* ---------- 转像素 / 抠图布局 ---------- */
+/* ---------- 转像素 / 后续处理布局 ---------- */
 .convert-layout {
   display: grid; grid-template-columns: 1fr 300px; gap: 16px;
   margin-top: 24px; align-items: start;
 }
 @media (max-width: 860px) { .convert-layout { grid-template-columns: 1fr; } }
+
+.workflow-step {
+  margin-top: 24px; padding: 18px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--card);
+}
+.workflow-step-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.workflow-step-head .card-title { margin-bottom: 0; }
+.step-kicker {
+  margin: 0 0 3px; color: var(--primary-dark); font-size: 11px;
+  font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.workflow-step > .convert-layout { margin-top: 16px; }
 
 .preview-box {
   display: flex; justify-content: center; align-items: center;
