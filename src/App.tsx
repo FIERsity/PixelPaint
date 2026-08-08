@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import Editor from "./components/Editor";
 import Convert from "./components/Convert";
 import {
-  addFrame, clampIndex, createAnim, deleteFrame, moveFrame, type PixelAnim,
+  addFrame, clampIndex, createAnim, deleteFrame, moveFrame, resizeFrames, type PixelAnim,
 } from "./lib/anim";
 import { composite, type PixelDoc } from "./lib/pixelDoc";
 import { CUSTOM_PALETTE, type Palette } from "./lib/palette";
@@ -245,6 +245,12 @@ export default function App() {
   const setDoc = useCallback((d: PixelDoc) => {
     setAnim((a) => ({ ...a, frames: a.frames.map((f, i) => (i === frameIndex ? d : f)) }));
   }, [frameIndex]);
+
+  const resizeAllFrames = useCallback((width: number, height: number) => {
+    setAnim((current) => resizeFrames(current, width, height));
+    setEpoch((current) => current + 1);
+    setPlaying(false);
+  }, []);
 
   // 帧操作
   const selectFrame = useCallback((i: number) => {
@@ -541,6 +547,7 @@ export default function App() {
                 onFrameDuplicate: () => insertFrame("duplicate"),
                 onFrameDelete: removeFrame,
                 onFrameShift: shiftFrame,
+                onResizeFrames: resizeAllFrames,
                 onFpsChange: setFps,
                 onTogglePlay: () => setPlaying((p) => !p),
                 onToggleOnion: () => setOnion((o) => !o),

@@ -59,6 +59,7 @@ export interface AnimationProps {
   onFrameDuplicate: () => void;
   onFrameDelete: () => void;
   onFrameShift: (dir: -1 | 1) => void;
+  onResizeFrames: (width: number, height: number) => void;
   onFpsChange: (fps: number) => void;
   onTogglePlay: () => void;
   onToggleOnion: () => void;
@@ -1530,13 +1531,18 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const applyResize = async () => {
     const w = clampSize(sizeW);
     const h = clampSize(sizeH);
-    if (w === doc.width && h === doc.height) return;
-    const shrinking = w < doc.width || h < doc.height;
-    if (shrinking && !(await askConfirm(t("resizeConfirm", {
-      fromW: doc.width, fromH: doc.height, toW: w, toH: h,
-    })))) return;
-    withHistory(() => setDoc(resizeDoc(doc, w, h)));
-    onNotice?.(t("resized", { width: w, height: h }));
+    const frames = animation?.frames ?? [doc];
+    if (frames.every((frame) => frame.width === w && frame.height === h)) return;
+    const shrinking = frames.some((frame) => w < frame.width || h < frame.height);
+    if (shrinking) {
+      const confirmKey = frames.length > 1 ? "resizeFramesConfirm" : "resizeConfirm";
+      if (!(await askConfirm(t(confirmKey, {
+        count: frames.length, fromW: doc.width, fromH: doc.height, toW: w, toH: h,
+      })))) return;
+    }
+    if (animation) animation.onResizeFrames(w, h);
+    else withHistory(() => setDoc(resizeDoc(doc, w, h)));
+    onNotice?.(t(frames.length > 1 ? "resizedFrames" : "resized", { count: frames.length, width: w, height: h }));
   };
 
   const newCanvas = async () => {
@@ -2161,7 +2167,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
             </div>
           )}
           <div className="size-row canvas-resize-actions">
-            <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={() => void applyResize()} disabled={sizeW === doc.width && sizeH === doc.height}>{t("resizeKeepContent")}</button>
+            <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={() => void applyResize()} disabled={(animation?.frames ?? [doc]).every((frame) => frame.width === sizeW && frame.height === sizeH)}>{t("resizeKeepContent")}</button>
             <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={() => void newCanvas()}>{t("newBlankCanvas")}</button>
           </div>
 

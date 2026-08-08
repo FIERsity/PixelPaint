@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  addFrame, clampIndex, createAnim, deleteFrame, moveFrame,
+  addFrame, clampIndex, createAnim, deleteFrame, moveFrame, resizeFrames,
 } from "./anim";
 import { putPixel } from "./pixelDoc";
 
@@ -50,6 +50,19 @@ describe("anim 帧操作", () => {
     const ids = m.frames.map((f) => f.layers[0].id);
     expect(ids[0]).toBe(a.frames[2].layers[0].id);
     expect(ids[2]).toBe(a.frames[1].layers[0].id);
+  });
+
+  it("resizeFrames 同步调整全部帧并保留各帧内容", () => {
+    let a = createAnim(4, 4);
+    a = addFrame(a, "blank");
+    putPixel(a.frames[0].layers[0].pixels, 4, 1, 1, 255, 0, 0, 255);
+    putPixel(a.frames[1].layers[0].pixels, 4, 2, 2, 0, 255, 0, 255);
+
+    const resized = resizeFrames(a, 3, 3);
+
+    expect(resized.frames.every((frame) => frame.width === 3 && frame.height === 3)).toBe(true);
+    expect(resized.frames[0].layers[0].pixels[(1 * 3 + 1) * 4]).toBe(255);
+    expect(resized.frames[1].layers[0].pixels[(2 * 3 + 2) * 4 + 1]).toBe(255);
   });
 
   it("clampIndex 越界修正", () => {

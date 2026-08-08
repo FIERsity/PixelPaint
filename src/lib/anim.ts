@@ -1,9 +1,9 @@
 // ============================================================
 // PixelPaint · 帧动画数据模型（纯函数，可单测）
-// 一个动画 = 若干帧，每帧是一个独立 PixelDoc（宽高/图层独立）
+// 一个动画 = 若干帧；画布尺寸默认统一，各帧图层与像素内容独立
 // ============================================================
 
-import { createDoc, cloneDoc, uid, type PixelDoc } from "./pixelDoc";
+import { createDoc, cloneDoc, resizeDoc, uid, type PixelDoc } from "./pixelDoc";
 import type { Palette } from "./palette";
 
 export interface PixelAnim {
@@ -48,6 +48,15 @@ export function moveFrame(anim: PixelAnim, from: number, to: number): PixelAnim 
   const [f] = frames.splice(from, 1);
   frames.splice(Math.max(0, Math.min(to, frames.length)), 0, f);
   return { ...anim, frames };
+}
+
+/** 将全部帧同步为同一画布尺寸，逐帧保留左上角内容。 */
+export function resizeFrames(anim: PixelAnim, width: number, height: number): PixelAnim {
+  if (anim.frames.every((frame) => frame.width === width && frame.height === height)) return anim;
+  return {
+    ...anim,
+    frames: anim.frames.map((frame) => resizeDoc(frame, width, height)),
+  };
 }
 
 /** 删除帧后校正当前选中索引 */
