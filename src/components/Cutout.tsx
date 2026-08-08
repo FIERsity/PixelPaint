@@ -262,7 +262,7 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onRe
       {phase === "done" && resultFile && (
         <div className="operation-result-actions">
           <div className="tool-divider" />
-          <button type="button" className="btn-primary" onClick={sendToCanvas}>{t("sendToCanvas")}</button>
+          <button type="button" className="btn-ghost background-send-button" onClick={sendToCanvas}>{t("sendToCanvas")}</button>
           <button type="button" className="btn-ghost" onClick={() => onReturnToPixel(resultFile)}>{t("returnToPixel")}</button>
           <button type="button" className="btn-ghost" onClick={download}>{t("downloadPng")}</button>
         </div>

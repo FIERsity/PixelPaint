@@ -408,6 +408,7 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
 .form-error { color: var(--red); font-size: 13px; margin-top: 8px; }
 .operation-main-action { width: 100%; margin-top: 4px; }
 .operation-actions, .operation-result-actions { display: flex; flex-direction: column; gap: 8px; }
+.background-send-button { background: #fff; font-weight: 600; }
 .operation-progress { margin: 6px 0 12px; }
 .progress-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
 .result-empty { color: var(--muted); font-size: 13px; }
