@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Editor from "./components/Editor";
 import Convert from "./components/Convert";
 import Cutout from "./components/Cutout";
-import { composite, createDoc, type PixelDoc } from "./lib/pixelDoc";
-import { clearAutosave, loadAutosave, saveAutosave } from "./lib/persist";
+import {
+  addFrame, clampIndex, createAnim, deleteFrame, moveFrame, type PixelAnim,
+} from "./lib/anim";
+import { composite, type PixelDoc } from "./lib/pixelDoc";
+import { clearAutosave, downloadProject, loadAutosave, readProjectFile, saveAutosave } from "./lib/persist";
 
 type Tab = "editor" | "convert" | "cutout";
 
@@ -26,7 +29,7 @@ function BrandIcon() {
   );
 }
 
-// 画布是否有内容（用于覆盖前确认）
+// 帧是否有内容（用于覆盖前确认）
 function hasContent(doc: PixelDoc): boolean {
   const px = composite(doc);
   for (let i = 3; i < px.length; i += 4) if (px[i] !== 0) return true;
@@ -35,7 +38,12 @@ function hasContent(doc: PixelDoc): boolean {
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("editor");
-  const [doc, setDoc] = useState<PixelDoc>(() => createDoc(32, 32));
+  const [anim, setAnim] = useState<PixelAnim>(() => createAnim(32, 32));
+  const [frameIndex, setFrameIndex] = useState(0);
+  const [epoch, setEpoch] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [onion, setOnion] = useState(false);
+  const [onionNext, setOnionNext] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const restoringRef = useRef(true);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -46,14 +54,83 @@ export default function App() {
     noticeTimer.current = window.setTimeout(() => setNotice(null), 3600);
   }, []);
 
+  const doc = anim.frames[frameIndex] ?? anim.frames[0];
+  const frames = anim.frames;
+
+  // 更新当前帧（Editor 编辑时调用）
+  const setDoc = useCallback((d: PixelDoc) => {
+    setAnim((a) => ({ ...a, frames: a.frames.map((f, i) => (i === frameIndex ? d : f)) }));
+  }, [frameIndex]);
+
+  // 帧操作
+  const selectFrame = useCallback((i: number) => {
+    setFrameIndex(clampIndex(i, frames.length));
+    setEpoch((e) => e + 1);
+  }, [frames.length]);
+
+  const insertFrame = useCallback((mode: "blank" | "duplicate") => {
+    setAnim((a) => {
+      const next = addFrame(a, mode, frameIndex);
+      setFrameIndex(frameIndex + 1);
+      return next;
+    });
+    setEpoch((e) => e + 1);
+    setPlaying(false);
+  }, [frameIndex]);
+
+  const removeFrame = useCallback(() => {
+    if (frames.length <= 1) {
+      showNotice("至少保留一帧");
+      return;
+    }
+    if (!confirm(`删除第 ${frameIndex + 1} 帧？`)) return;
+    setAnim((a) => deleteFrame(a, frameIndex) ?? a);
+    setFrameIndex((i) => clampIndex(i, frames.length - 1));
+    setEpoch((e) => e + 1);
+    setPlaying(false);
+  }, [frames.length, frameIndex, showNotice]);
+
+  const shiftFrame = useCallback((dir: -1 | 1) => {
+    setAnim((a) => {
+      const next = moveFrame(a, frameIndex, frameIndex + dir);
+      setFrameIndex((i) => clampIndex(i + dir, next.frames.length));
+      return next;
+    });
+    setEpoch((e) => e + 1);
+  }, [frameIndex]);
+
+  const setFps = useCallback((fps: number) => {
+    setAnim((a) => ({ ...a, fps: Math.max(1, Math.min(60, Math.round(fps))) }));
+  }, []);
+
+  // 播放循环
+  useEffect(() => {
+    if (!playing) return;
+    const id = window.setInterval(() => {
+      setFrameIndex((i) => (i + 1) % frames.length);
+    }, Math.max(40, 1000 / anim.fps));
+    return () => window.clearInterval(id);
+  }, [playing, frames.length, anim.fps]);
+
+  // 洋葱皮：上一帧（或下一帧）的合成图
+  const onionPixels = useMemo(() => {
+    if (!onion) return null;
+    const prev = frames[frameIndex - 1];
+    const next = frames[frameIndex + 1];
+    const target = prev ?? (onionNext ? next : null);
+    return target ? composite(target) : null;
+  }, [onion, onionNext, frames, frameIndex]);
+
   // 启动时恢复本地草稿
   useEffect(() => {
     let alive = true;
     (async () => {
       const draft = await loadAutosave();
       if (alive && draft) {
-        setDoc(draft);
-        showNotice(`已恢复上次的草稿（${draft.width}×${draft.height}）`);
+        setAnim(draft);
+        setFrameIndex(clampIndex(0, draft.frames.length));
+        setEpoch((e) => e + 1);
+        showNotice(`已恢复上次的草稿（${draft.frames.length} 帧 · ${draft.frames[0]?.width}×${draft.frames[0]?.height}）`);
       }
       restoringRef.current = false;
     })();
@@ -64,28 +141,55 @@ export default function App() {
   useEffect(() => {
     if (restoringRef.current) return;
     const t = window.setTimeout(() => {
-      const res = saveAutosave(doc);
+      const res = saveAutosave(anim);
       if (!res.ok && res.reason) showNotice(res.reason);
     }, 800);
     return () => window.clearTimeout(t);
-  }, [doc, showNotice]);
+  }, [anim, showNotice]);
 
   useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
 
   // 转像素 / 抠图结果 -> 画板（覆盖前确认）
   const handleImport = useCallback((next: PixelDoc) => {
-    if (hasContent(doc) && !confirm("画板已有内容，导入会替换它（可在画板里撤销）。继续？")) return;
-    setDoc(next);
+    if (hasContent(doc) && !confirm("画板已有内容，导入会替换当前帧（可在画板里撤销）。继续？")) return;
+    setAnim((a) => {
+      const frames2 = a.frames.map((f, i) => (i === frameIndex ? next : f));
+      return { ...a, frames: frames2 };
+    });
     setTab("editor");
+    setEpoch((e) => e + 1);
     showNotice(`已送入画板 ${next.width}×${next.height}`);
-  }, [doc, showNotice]);
+  }, [doc, frameIndex, showNotice]);
 
   const startOver = () => {
     if (!confirm("清空画布并删除本地草稿？")) return;
     clearAutosave();
-    setDoc(createDoc(32, 32));
+    setAnim(createAnim(32, 32));
+    setFrameIndex(0);
+    setEpoch((e) => e + 1);
+    setPlaying(false);
     showNotice("已清空，重新开始");
   };
+
+  // 工程保存 / 打开（多帧）
+  const saveProject = useCallback(() => {
+    downloadProject(anim);
+    showNotice(`工程已保存（${anim.frames.length} 帧 · ${anim.fps}fps）`);
+  }, [anim, showNotice]);
+
+  const openProject = useCallback(async (file: File) => {
+    const next = await readProjectFile(file);
+    if (!next) {
+      showNotice("无法读取该工程文件");
+      return;
+    }
+    if (!confirm(`打开工程会替换当前画布与全部帧（共 ${next.frames.length} 帧），继续？`)) return;
+    setAnim(next);
+    setFrameIndex(0);
+    setEpoch((e) => e + 1);
+    setPlaying(false);
+    showNotice(`已打开工程（${next.frames.length} 帧 · ${next.fps}fps）`);
+  }, [showNotice]);
 
   // Tab 方向键导航（ARIA tabs 规范）
   const onTabKeyDown = (e: React.KeyboardEvent) => {
@@ -105,7 +209,7 @@ export default function App() {
             <div className="brand-icon"><BrandIcon /></div>
             <div>
               <h1>Pixel<span className="brand-sub">Paint</span></h1>
-              <p className="tagline">在线像素画工作站 · 画 / 转 / 抠</p>
+              <p className="tagline">在线像素画工作站 · 画 / 转 / 抠 · 帧动画</p>
             </div>
           </div>
           <div className="header-actions">
@@ -134,7 +238,32 @@ export default function App() {
       <main className="container">
         {tab === "editor" && (
           <div role="tabpanel" id="panel-editor" aria-labelledby="tab-editor">
-            <Editor doc={doc} setDoc={setDoc} onNotice={showNotice} />
+            <Editor
+              doc={doc}
+              setDoc={setDoc}
+              onNotice={showNotice}
+              epoch={epoch}
+              onionPixels={onionPixels}
+              onSaveProject={saveProject}
+              onOpenProject={openProject}
+              animation={{
+                frames,
+                frameIndex,
+                fps: anim.fps,
+                playing,
+                onion,
+                onionNext,
+                onFrameSelect: selectFrame,
+                onFrameAddBlank: () => insertFrame("blank"),
+                onFrameDuplicate: () => insertFrame("duplicate"),
+                onFrameDelete: removeFrame,
+                onFrameShift: shiftFrame,
+                onFpsChange: setFps,
+                onTogglePlay: () => setPlaying((p) => !p),
+                onToggleOnion: () => setOnion((o) => !o),
+                onToggleOnionNext: () => setOnionNext((o) => !o),
+              }}
+            />
           </div>
         )}
         {tab === "convert" && (

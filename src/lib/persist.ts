@@ -5,8 +5,9 @@
 // ============================================================
 
 import { uid, type Layer, type PixelDoc } from "./pixelDoc";
+import type { PixelAnim } from "./anim";
 
-export const AUTOSAVE_KEY = "pixelpaint:autosave:v1";
+export const AUTOSAVE_KEY = "pixelpaint:autosave:v2";
 export const PROJECT_EXT = ".pixelpaint.json";
 const MAX_AUTOSAVE_BYTES = 4_000_000; // localStorage 通常 ~5MB，留余量
 
@@ -25,6 +26,15 @@ export interface SerializedDoc {
   height: number;
   savedAt: number;
   layers: SerializedLayer[];
+}
+
+// v2：多帧工程
+export interface SerializedProject {
+  format: "pixelpaint";
+  version: 2;
+  fps: number;
+  savedAt: number;
+  frames: SerializedDoc[];
 }
 
 function layerToPng(layer: Layer, width: number, height: number): string {
@@ -94,12 +104,44 @@ export async function deserializeDoc(data: unknown): Promise<PixelDoc | null> {
   return { width, height, layers };
 }
 
+// ---------- 多帧工程 ----------
+export function serializeAnim(anim: PixelAnim): SerializedProject {
+  return {
+    format: "pixelpaint",
+    version: 2,
+    fps: anim.fps,
+    savedAt: Date.now(),
+    frames: anim.frames.map((f) => serializeDoc(f)),
+  };
+}
+
+export async function deserializeAnim(data: unknown): Promise<PixelAnim | null> {
+  const d = data as { format?: string; version?: number; fps?: number; frames?: SerializedDoc[] } | null;
+  if (!d || d.format !== "pixelpaint") return null;
+
+  // v1 单帧兼容：把旧工程当成单帧动画
+  if ((d.version ?? 1) < 2 || !Array.isArray(d.frames) || d.frames.length === 0) {
+    const doc = await deserializeDoc(d as SerializedDoc);
+    if (!doc) return null;
+    return { frames: [doc], fps: 8 };
+  }
+
+  const frames: PixelDoc[] = [];
+  for (const f of d.frames) {
+    const doc = await deserializeDoc(f);
+    if (doc) frames.push(doc);
+  }
+  if (frames.length === 0) return null;
+  const fps = typeof d.fps === "number" && d.fps >= 1 && d.fps <= 60 ? Math.round(d.fps) : 8;
+  return { frames, fps };
+}
+
 // ---------- 自动草稿（localStorage） ----------
-export function saveAutosave(doc: PixelDoc): { ok: boolean; reason?: string } {
+export function saveAutosave(anim: PixelAnim): { ok: boolean; reason?: string } {
   try {
-    const json = JSON.stringify(serializeDoc(doc));
+    const json = JSON.stringify(serializeAnim(anim));
     if (json.length > MAX_AUTOSAVE_BYTES) {
-      return { ok: false, reason: "画布过大，超出自动保存容量（请用「保存工程」导出文件）" };
+      return { ok: false, reason: "工程过大，超出自动保存容量（请用「保存工程」导出文件）" };
     }
     localStorage.setItem(AUTOSAVE_KEY, json);
     return { ok: true };
@@ -108,11 +150,11 @@ export function saveAutosave(doc: PixelDoc): { ok: boolean; reason?: string } {
   }
 }
 
-export async function loadAutosave(): Promise<PixelDoc | null> {
+export async function loadAutosave(): Promise<PixelAnim | null> {
   try {
     const raw = localStorage.getItem(AUTOSAVE_KEY);
     if (!raw) return null;
-    return await deserializeDoc(JSON.parse(raw));
+    return await deserializeAnim(JSON.parse(raw));
   } catch {
     return null;
   }
@@ -135,20 +177,22 @@ export function hasAutosave(): boolean {
 }
 
 // ---------- 工程文件导出 / 导入 ----------
-export function downloadProject(doc: PixelDoc, name = "pixelpaint") {
-  const json = JSON.stringify(serializeDoc(doc));
+export function downloadProject(anim: PixelAnim, name = "pixelpaint") {
+  const json = JSON.stringify(serializeAnim(anim));
   const blob = new Blob([json], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${name}-${doc.width}x${doc.height}${PROJECT_EXT}`;
+  const w = anim.frames[0]?.width ?? 32;
+  const h = anim.frames[0]?.height ?? 32;
+  a.download = `${name}-${w}x${h}${PROJECT_EXT}`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
-export async function readProjectFile(file: File): Promise<PixelDoc | null> {
+export async function readProjectFile(file: File): Promise<PixelAnim | null> {
   try {
-    return await deserializeDoc(JSON.parse(await file.text()));
+    return await deserializeAnim(JSON.parse(await file.text()));
   } catch {
     return null;
   }

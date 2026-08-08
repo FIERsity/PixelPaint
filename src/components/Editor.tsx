@@ -6,7 +6,6 @@ import {
   type Layer, type MirrorMode, type PixelDoc, type Rgba, type Tool,
 } from "../lib/pixelDoc";
 import { DEFAULT_PALETTE, parseHex, PRESET_PALETTES, rgbToHex, type Palette } from "../lib/palette";
-import { downloadProject, readProjectFile } from "../lib/persist";
 import { Pencil } from "./icons/pencil";
 import { Eraser } from "./icons/eraser";
 import { Eyedropper } from "./icons/eyedropper";
@@ -21,10 +20,35 @@ import { Rect } from "./icons/rect";
 import PixelIcon from "../lib/PixelIcon";
 import type { PxlKitData } from "../lib/pixelTypes";
 
+export interface AnimationProps {
+  frames: PixelDoc[];
+  frameIndex: number;
+  fps: number;
+  playing: boolean;
+  onion: boolean;
+  onionNext: boolean;
+  onFrameSelect: (i: number) => void;
+  onFrameAddBlank: () => void;
+  onFrameDuplicate: () => void;
+  onFrameDelete: () => void;
+  onFrameShift: (dir: -1 | 1) => void;
+  onFpsChange: (fps: number) => void;
+  onTogglePlay: () => void;
+  onToggleOnion: () => void;
+  onToggleOnionNext: () => void;
+}
+
 interface EditorProps {
   doc: PixelDoc;
   setDoc: (d: PixelDoc) => void;
   onNotice?: (msg: string) => void;
+  /** 洋葱皮：相邻帧的合成位图（非当前帧） */
+  onionPixels?: Uint8ClampedArray | null;
+  animation?: AnimationProps;
+  /** 外部替换文档（导入/换帧）时自增，Editor 据此清空撤销历史 */
+  epoch?: number;
+  onSaveProject?: () => void;
+  onOpenProject?: (file: File) => Promise<void> | void;
 }
 
 const ZOOMS = [1, 2, 4, 8, 16, 32];
@@ -47,7 +71,48 @@ const MIRRORS: Array<{ id: MirrorMode; label: string; glyph: string }> = [
 
 const TRANSPARENT: Rgba = [0, 0, 0, 0];
 
-export default function Editor({ doc, setDoc, onNotice }: EditorProps) {
+// 单帧缩略图：把帧的合成结果画到小画布
+function FrameThumb({ frame, active, index, onClick }: {
+  frame: PixelDoc;
+  active: boolean;
+  index: number;
+  onClick: () => void;
+}) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const maxSide = 44;
+    const scale = maxSide / Math.max(frame.width, frame.height);
+    c.width = Math.max(1, Math.round(frame.width * scale));
+    c.height = Math.max(1, Math.round(frame.height * scale));
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    ctx.imageSmoothingEnabled = false;
+    const temp = document.createElement("canvas");
+    temp.width = frame.width;
+    temp.height = frame.height;
+    const tctx = temp.getContext("2d")!;
+    tctx.putImageData(new ImageData(composite(frame).slice(), frame.width, frame.height), 0, 0);
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.drawImage(temp, 0, 0, c.width, c.height);
+  }, [frame]);
+  return (
+    <button
+      type="button"
+      className={`frame-thumb ${active ? "active" : ""}`}
+      onClick={onClick}
+      title={`第 ${index + 1} 帧`}
+      aria-label={`选择第 ${index + 1} 帧`}
+      aria-pressed={active}
+    >
+      <canvas ref={ref} className="pixelated" />
+      <span>{index + 1}</span>
+    </button>
+  );
+}
+
+export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, epoch = 0, onSaveProject, onOpenProject }: EditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const historyRef = useRef(new History(80));
@@ -73,6 +138,16 @@ export default function Editor({ doc, setDoc, onNotice }: EditorProps) {
   const [exportScale, setExportScale] = useState(4);
 
   const drag = useRef({ drawing: false, tool: "pencil" as Tool, x: 0, y: 0, lastX: 0, lastY: 0 });
+
+  // 外部替换文档（换帧/导入）时清空撤销历史
+  const prevEpoch = useRef(epoch);
+  useEffect(() => {
+    if (prevEpoch.current !== epoch) {
+      prevEpoch.current = epoch;
+      historyRef.current.reset();
+      recorderRef.current = null;
+    }
+  }, [epoch]);
 
   // activeLayer 始终有效
   const layerIndex = Math.min(activeLayer, doc.layers.length - 1);
@@ -135,6 +210,23 @@ export default function Editor({ doc, setDoc, onNotice }: EditorProps) {
     const lcs = layerCanvasesRef.current;
 
     ctx.clearRect(0, 0, doc.width, doc.height);
+
+    // 洋葱皮：把相邻帧的合成图（着色为蓝）铺在当前帧之下
+    if (onionPixels && onionPixels.length === doc.width * doc.height * 4) {
+      const img = ctx.createImageData(doc.width, doc.height);
+      img.data.set(onionPixels);
+      for (let i = 0; i < img.data.length; i += 4) {
+        const a = img.data[i + 3];
+        if (a > 0) {
+          img.data[i] = 60;
+          img.data[i + 1] = 130;
+          img.data[i + 2] = 255;
+          img.data[i + 3] = Math.round(a * 0.38); // 半透明蓝幽灵
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+    }
+
     for (let i = 0; i < doc.layers.length; i++) {
       const l = doc.layers[i];
       if (!l.visible || l.opacity <= 0) continue;
@@ -142,7 +234,7 @@ export default function Editor({ doc, setDoc, onNotice }: EditorProps) {
       ctx.drawImage(lcs[i].canvas, 0, 0);
     }
     ctx.globalAlpha = 1;
-  }, [doc, rebuildLayerCanvases]);
+  }, [doc, rebuildLayerCanvases, onionPixels]);
 
   useEffect(() => { draw(); }, [draw]);
 
@@ -512,22 +604,11 @@ export default function Editor({ doc, setDoc, onNotice }: EditorProps) {
   }, [doc, exportScale]);
 
   const saveProject = useCallback(() => {
-    downloadProject(doc);
-    onNotice?.("工程已保存到下载目录");
-  }, [doc, onNotice]);
+    onSaveProject?.();
+  }, [onSaveProject]);
 
   const openProject = async (file: File) => {
-    const next = await readProjectFile(file);
-    if (!next) {
-      onNotice?.("无法读取该工程文件");
-      return;
-    }
-    if (!confirm("打开工程会替换当前画布内容，继续？")) return;
-    historyRef.current.reset();
-    setDoc(next);
-    setActiveLayer(0);
-    refresh();
-    onNotice?.(`已打开工程 ${next.width}×${next.height}`);
+    await onOpenProject?.(file);
   };
 
   // ---------- 键盘快捷键 ----------
@@ -564,11 +645,16 @@ export default function Editor({ doc, setDoc, onNotice }: EditorProps) {
         setMirror((m) => MIRRORS[(MIRRORS.findIndex((x) => x.id === m) + 1) % MIRRORS.length].id);
         return;
       }
+      if (k === " " && animation) {
+        e.preventDefault();
+        animation.onTogglePlay();
+        return;
+      }
       if (k === "g") return; // 已被填充占用
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, saveProject, exportPng]);
+  }, [undo, redo, saveProject, exportPng, animation]);
 
   const gridVisible = showGrid && zoom >= 4;
   const cell = zoom;
@@ -686,6 +772,61 @@ export default function Editor({ doc, setDoc, onNotice }: EditorProps) {
         <p className="shortcut-hint">
           快捷键：B 铅笔 · E 橡皮 · I 取色 · G 填充 · L 直线 · R 矩形 · M 对称 · [ ] 笔刷 · - + 缩放 · Ctrl+Z 撤销 · Ctrl+S 存工程
         </p>
+
+        {animation && (
+          <div className="frame-strip" role="toolbar" aria-label="帧动画">
+            <div className="frame-controls">
+              <button
+                type="button"
+                className="btn-ghost icon-btn"
+                onClick={animation.onTogglePlay}
+                aria-label={animation.playing ? "暂停预览" : "播放预览"}
+                title={animation.playing ? "暂停预览" : "播放预览（空格）"}
+              >
+                {animation.playing ? "⏸" : "▶"}
+              </button>
+              <label className="ghost-check">
+                <input type="checkbox" checked={animation.onion} onChange={animation.onToggleOnion} />
+                洋葱皮
+              </label>
+              <label className="ghost-check" title="同时显示下一帧（淡青色）">
+                <input type="checkbox" checked={animation.onionNext} onChange={animation.onToggleOnionNext} />
+                显示下一帧
+              </label>
+              <label className="fps-label">
+                <span>帧率</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={animation.fps}
+                  onChange={(e) => animation.onFpsChange(Number(e.target.value))}
+                  className="num-input"
+                  style={{ width: 54 }}
+                  aria-label="帧率"
+                />
+              </label>
+            </div>
+            <div className="frame-list">
+              {animation.frames.map((f, i) => (
+                <FrameThumb
+                  key={f.layers[0]?.id ?? i}
+                  frame={f}
+                  index={i}
+                  active={i === animation.frameIndex}
+                  onClick={() => animation.onFrameSelect(i)}
+                />
+              ))}
+              <div className="frame-ops">
+                <button type="button" className="frame-op" onClick={animation.onFrameAddBlank} title="新建空白帧" aria-label="新建空白帧">＋</button>
+                <button type="button" className="frame-op" onClick={animation.onFrameDuplicate} title="复制当前帧" aria-label="复制当前帧">⧉</button>
+                <button type="button" className="frame-op" onClick={() => animation.onFrameShift(-1)} title="左移" aria-label="左移当前帧">‹</button>
+                <button type="button" className="frame-op" onClick={() => animation.onFrameShift(1)} title="右移" aria-label="右移当前帧">›</button>
+                <button type="button" className="frame-op danger" onClick={animation.onFrameDelete} title="删除当前帧" aria-label="删除当前帧">✕</button>
+              </div>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* 右侧面板 */}

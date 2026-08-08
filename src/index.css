@@ -339,6 +339,50 @@ button { font-family: inherit; }
   background: #e8f1ff; color: var(--primary-dark); font-weight: 600;
 }
 
+/* ---------- 帧动画条 ---------- */
+.frame-strip {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.frame-controls {
+  display: flex; align-items: center; gap: 12px;
+  flex-wrap: wrap; margin-bottom: 10px;
+}
+.fps-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--muted);
+}
+.frame-list {
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+}
+.frame-thumb {
+  position: relative; width: 54px; height: 54px; padding: 0;
+  border: 2px solid var(--border); border-radius: 8px;
+  background: var(--card); cursor: pointer;
+  overflow: hidden; display: flex; align-items: center; justify-content: center;
+  transition: border-color 0.15s;
+}
+.frame-thumb canvas { max-width: 46px; max-height: 46px; }
+.frame-thumb span {
+  position: absolute; right: 2px; bottom: 2px; font-size: 10px; font-weight: 700;
+  color: var(--text); background: rgba(255, 255, 255, 0.78);
+  border-radius: 3px; padding: 0 4px; line-height: 1.4;
+}
+.frame-thumb:hover { border-color: #bcd6ff; }
+.frame-thumb.active {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+.frame-ops { display: flex; gap: 4px; margin-left: 4px; }
+.frame-op {
+  font: inherit; font-size: 14px; width: 30px; height: 30px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--card); color: var(--text);
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+}
+.frame-op:hover { border-color: var(--primary); color: var(--primary); }
+.frame-op.danger:hover { border-color: var(--red); color: var(--red); }
+
 /* ---------- Footer ---------- */
 .site-footer { margin-top: auto; padding: 26px 0; text-align: center; }
 .site-footer p { font-size: 13px; color: var(--muted); }
