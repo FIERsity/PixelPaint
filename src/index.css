@@ -318,6 +318,8 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
 .canvas-input.canvas-tool-select { cursor: crosshair; }
 .canvas-input.canvas-tool-move { cursor: grab; }
 .canvas-input.canvas-tool-move:active { cursor: grabbing; }
+.canvas-input.canvas-tool-picker,
+.canvas-input.canvas-tool-picker:active,
 .canvas-input.canvas-color-pick-active,
 .canvas-input.canvas-color-pick-active:active {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M17.5 2.5 21.5 6.5 17 11l-1.5-1.5-8 8-4 1 1-4 8-8L11 5l4.5 4.5L20 5l-2.5-2.5Z' fill='%23fff' stroke='%23191919' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E") 4 20, crosshair;
@@ -466,13 +468,45 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
 .palette-empty { grid-column: 1 / -1; color: var(--muted); font-size: 12px; padding: 8px 0; }
 .color-row { display: flex; gap: 8px; align-items: center; }
 .palette-color-add-row { align-items: stretch; }
+.palette-color-picker-wrap { position: relative; flex: 0 0 36px; width: 36px; height: 36px; }
 .palette-color-picker {
   appearance: none; flex: 0 0 36px; width: 36px; height: 36px; padding: 0;
   border: 2px solid var(--border); border-radius: 9px; background: none; overflow: hidden; cursor: pointer;
 }
+.palette-color-picker-trigger { display: block; }
 .palette-color-picker::-webkit-color-swatch-wrapper { padding: 0; }
 .palette-color-picker::-webkit-color-swatch { border: 0; border-radius: 6px; }
 .palette-color-picker::-moz-color-swatch { border: 0; border-radius: 6px; }
+.palette-color-popover {
+  position: absolute; z-index: 60; top: calc(100% + 8px); left: 0; width: 244px; padding: 10px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--card);
+  box-shadow: 0 10px 28px rgba(25, 25, 25, 0.2);
+}
+.palette-color-sv {
+  position: relative; width: 100%; height: 138px; overflow: hidden; border-radius: 7px; cursor: crosshair;
+  background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent);
+  touch-action: none;
+}
+.palette-color-sv-thumb {
+  position: absolute; width: 14px; height: 14px; border: 2px solid #fff; border-radius: 50%;
+  box-shadow: 0 0 0 2px #191919; transform: translate(-50%, -50%); pointer-events: none;
+}
+.palette-color-hue-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.palette-color-preview {
+  flex: 0 0 30px; width: 30px; height: 30px; border: 2px solid var(--border); border-radius: 9px;
+}
+.palette-color-hue {
+  appearance: none; flex: 1; min-width: 0; height: 12px; margin: 0; border: 0; border-radius: 999px;
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); cursor: pointer;
+}
+.palette-color-hue::-webkit-slider-thumb {
+  appearance: none; width: 18px; height: 18px; border: 2px solid #fff; border-radius: 50%;
+  background: currentColor; box-shadow: 0 0 0 1px rgba(25, 25, 25, 0.3);
+}
+.palette-color-hue::-moz-range-thumb {
+  width: 14px; height: 14px; border: 2px solid #fff; border-radius: 50%;
+  background: currentColor; box-shadow: 0 0 0 1px rgba(25, 25, 25, 0.3);
+}
 .palette-hex-input { flex: 0 1 88px; min-width: 76px; font-family: var(--mono); }
 .palette-add-color-btn { flex: 1; min-width: 88px; padding: 7px 8px; font-size: 12px; white-space: nowrap; }
 .palette-export-actions {

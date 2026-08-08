@@ -18,6 +18,7 @@ import {
 } from "../lib/palette";
 import { Pencil } from "./icons/pencil";
 import { Eraser } from "./icons/eraser";
+import { Eyedropper } from "./icons/eyedropper";
 import { PaintBucket } from "./icons/paint-bucket";
 import { Undo } from "./icons/undo";
 import { Redo } from "./icons/redo";
@@ -91,11 +92,51 @@ const ZOOMS = [1, 2, 4, 8, 16, 32];
 const TOOLS: Array<{ id: Tool; labelKey: string; icon: PxlKitData; key: string }> = [
   { id: "pencil", labelKey: "pencil", icon: Pencil, key: "B" },
   { id: "eraser", labelKey: "eraser", icon: Eraser, key: "E" },
+  { id: "picker", labelKey: "picker", icon: Eyedropper, key: "I" },
   { id: "fill", labelKey: "fill", icon: PaintBucket, key: "G" },
   { id: "line", labelKey: "line", icon: Line, key: "L" },
   { id: "select", labelKey: "selectionTool", icon: Selection, key: "M" },
   { id: "move", labelKey: "moveTool", icon: Move, key: "V" },
 ];
+
+interface HsvColor { h: number; s: number; v: number }
+
+function rgbToHsv(r: number, g: number, b: number): HsvColor {
+  const red = r / 255;
+  const green = g / 255;
+  const blue = b / 255;
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const delta = max - min;
+  let h = 0;
+  if (delta !== 0) {
+    if (max === red) h = 60 * (((green - blue) / delta) % 6);
+    else if (max === green) h = 60 * ((blue - red) / delta + 2);
+    else h = 60 * ((red - green) / delta + 4);
+  }
+  if (h < 0) h += 360;
+  return { h, s: max === 0 ? 0 : delta / max, v: max };
+}
+
+function hsvToHex({ h, s, v }: HsvColor): string {
+  const chroma = v * s;
+  const section = h / 60;
+  const x = chroma * (1 - Math.abs((section % 2) - 1));
+  let rgb: [number, number, number];
+  if (section < 1) rgb = [chroma, x, 0];
+  else if (section < 2) rgb = [x, chroma, 0];
+  else if (section < 3) rgb = [0, chroma, x];
+  else if (section < 4) rgb = [0, x, chroma];
+  else if (section < 5) rgb = [x, 0, chroma];
+  else rgb = [chroma, 0, x];
+  const offset = v - chroma;
+  return rgbToHex(...rgb.map((channel) => Math.round((channel + offset) * 255)) as [number, number, number]);
+}
+
+function hsvFromHex(value: string): HsvColor {
+  const rgb = parseHex(value) ?? [239, 125, 87];
+  return rgbToHsv(rgb[0], rgb[1], rgb[2]);
+}
 
 const TRANSPARENT: Rgba = [0, 0, 0, 0];
 
@@ -234,6 +275,8 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const [canvasColorPickArmed, setCanvasColorPickArmed] = useState(false);
   const [color, setColor] = useState<string>(palette.colors[3] ?? "#ef7d57");
   const [colorText, setColorText] = useState<string>(palette.colors[3] ?? "#ef7d57");
+  const [colorPickerOpen, setColorPickerOpen] = useState(false);
+  const [colorPickerHue, setColorPickerHue] = useState(() => hsvFromHex(palette.colors[3] ?? "#ef7d57").h);
   const [paletteName, setPaletteName] = useState(palette.name);
   const [renamingPaletteId, setRenamingPaletteId] = useState<string | null>(null);
   const [paletteManageOpen, setPaletteManageOpen] = useState(false);
@@ -287,14 +330,37 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const armCanvasColorPick = useCallback(() => {
     if (typeof window === "undefined") return;
     if (!window.matchMedia("(min-width: 561px) and (pointer: fine)").matches) return;
+    setColorPickerHue(hsvFromHex(color).h);
+    setColorPickerOpen(true);
     setCanvasColorPickArmed(true);
-  }, []);
+  }, [color]);
 
   const updateChosenColor = useCallback((value: string) => {
     setColor(value);
     setColorText(value);
+    setColorPickerOpen(false);
     setCanvasColorPickArmed(false);
   }, []);
+
+  const previewChosenColor = useCallback((value: string) => {
+    setColor(value);
+    setColorText(value);
+  }, []);
+
+  const updatePickerSaturationValue = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.type === "pointermove" && (event.buttons & 1) === 0) return;
+    if (event.type === "pointerdown") event.currentTarget.setPointerCapture(event.pointerId);
+    const rect = event.currentTarget.getBoundingClientRect();
+    const s = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    const v = Math.max(0, Math.min(1, 1 - (event.clientY - rect.top) / rect.height));
+    previewChosenColor(hsvToHex({ h: colorPickerHue, s, v }));
+  }, [colorPickerHue, previewChosenColor]);
+
+  const updatePickerHue = useCallback((h: number) => {
+    setColorPickerHue(h);
+    const current = hsvFromHex(color);
+    previewChosenColor(hsvToHex({ h, s: current.s, v: current.v }));
+  }, [color, previewChosenColor]);
 
   const paletteEditable = palette.source === "custom";
   const paletteDisplayName = palette.id === "custom-default" && palette.name === "自定义" ? t("paletteCustom") : palette.name;
@@ -1177,8 +1243,8 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     if (navigationRef.current) return;
     const [x, y] = toPixel(e);
 
-    // 桌面端颜色选择器开启后，画布临时充当吸管；取色完成后恢复原工具。
-    if (canvasColorPickArmed && e.pointerType !== "touch") {
+    // 调色板选色面板可临时取色；工具栏吸管则保持为当前工具。
+    if (tool === "picker" || (canvasColorPickArmed && e.pointerType !== "touch")) {
       const img = composite(doc);
       const [r, g, b, a] = getPixel(img, doc.width, x, y);
       if (a === 0) {
@@ -1623,6 +1689,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       onNotice?.(t("moveFinishFirst"));
       return;
     }
+    setColorPickerOpen(false);
     setCanvasColorPickArmed(false);
     setTool(next);
   }, [onNotice, t]);
@@ -1633,6 +1700,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       const el = e.target as HTMLElement | null;
       if (e.key === "Escape" && canvasColorPickArmed) {
         e.preventDefault();
+        setColorPickerOpen(false);
         setCanvasColorPickArmed(false);
         return;
       }
@@ -2054,14 +2122,53 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
             ))}
           </div>
           <div className="color-row palette-color-add-row">
-            <input
-              type="color"
-              className="palette-color-picker"
-              value={color}
-              onClick={armCanvasColorPick}
-              onChange={(e) => updateChosenColor(e.target.value)}
-              aria-label={t("chooseColor")}
-            />
+            <div className="palette-color-picker-wrap" onPointerLeave={() => setColorPickerOpen(false)}>
+              <button
+                type="button"
+                className="palette-color-picker palette-color-picker-trigger"
+                style={{ backgroundColor: color }}
+                onClick={() => {
+                  if (colorPickerOpen) {
+                    setColorPickerOpen(false);
+                    setCanvasColorPickArmed(false);
+                  } else {
+                    armCanvasColorPick();
+                  }
+                }}
+                aria-label={t("chooseColor")}
+                aria-haspopup="dialog"
+                aria-expanded={colorPickerOpen}
+              />
+              {colorPickerOpen && (() => {
+                const hsv = hsvFromHex(color);
+                return (
+                  <div className="palette-color-popover" role="dialog" aria-label={t("chooseColor")}>
+                    <div
+                      className="palette-color-sv"
+                      style={{ backgroundColor: `hsl(${colorPickerHue} 100% 50%)` }}
+                      onPointerDown={updatePickerSaturationValue}
+                      onPointerMove={updatePickerSaturationValue}
+                      aria-label={t("colorSaturationBrightness")}
+                    >
+                      <span className="palette-color-sv-thumb" style={{ left: `${hsv.s * 100}%`, top: `${(1 - hsv.v) * 100}%` }} />
+                    </div>
+                    <div className="palette-color-hue-row">
+                      <span className="palette-color-preview" style={{ backgroundColor: color }} aria-hidden="true" />
+                      <input
+                        type="range"
+                        className="palette-color-hue"
+                        min={0}
+                        max={359}
+                        value={Math.round(colorPickerHue)}
+                        style={{ color: `hsl(${colorPickerHue} 100% 50%)` }}
+                        onChange={(event) => updatePickerHue(Number(event.target.value))}
+                        aria-label={t("colorHue")}
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
             <input
               className="text-input palette-hex-input"
               value={colorText}
