@@ -4,14 +4,16 @@
 // ============================================================
 
 import { createDoc, cloneDoc, type PixelDoc } from "./pixelDoc";
+import type { Palette } from "./palette";
 
 export interface PixelAnim {
   frames: PixelDoc[];
   fps: number;
+  palette?: Palette;
 }
 
-export function createAnim(width = 32, height = 32, fps = 8, layerName = "图层 1"): PixelAnim {
-  return { frames: [createDoc(width, height, layerName)], fps };
+export function createAnim(width = 32, height = 32, fps = 8, layerName = "图层 1", palette?: Palette): PixelAnim {
+  return { frames: [createDoc(width, height, layerName)], fps, palette };
 }
 
 export function cloneFrame(doc: PixelDoc): PixelDoc {

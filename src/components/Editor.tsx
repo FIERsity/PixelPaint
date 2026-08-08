@@ -5,7 +5,17 @@ import {
   resizeDoc, StrokeRecorder, uid,
   type Layer, type PixelDoc, type Rgba, type Tool,
 } from "../lib/pixelDoc";
-import { DEFAULT_PALETTE, parseHex, PRESET_PALETTES, rgbToHex, type Palette } from "../lib/palette";
+import {
+  BUILTIN_PALETTES,
+  createCustomPalette,
+  normalizePaletteColors,
+  paletteToGpl,
+  paletteToJson,
+  parseHex,
+  parsePaletteText,
+  rgbToHex,
+  type Palette,
+} from "../lib/palette";
 import { Pencil } from "./icons/pencil";
 import { Eraser } from "./icons/eraser";
 import { Eyedropper } from "./icons/eyedropper";
@@ -44,6 +54,10 @@ export interface AnimationProps {
 interface EditorProps {
   doc: PixelDoc;
   setDoc: (d: PixelDoc) => void;
+  palette: Palette;
+  customPalettes: Palette[];
+  onPaletteChange: (palette: Palette) => void;
+  onCustomPalettesChange: (palettes: Palette[]) => void;
   onNotice?: (msg: string) => void;
   onConfirm: (message: string) => Promise<boolean>;
   /** 洋葱皮：相邻帧的合成位图（非当前帧） */
@@ -117,7 +131,7 @@ function hasVisiblePixels(doc: PixelDoc) {
   return false;
 }
 
-export default function Editor({ doc, setDoc, onNotice, onConfirm, onionPixels, animation, epoch = 0, onSaveProject, onOpenProject }: EditorProps) {
+export default function Editor({ doc, setDoc, palette, customPalettes, onPaletteChange, onCustomPalettesChange, onNotice, onConfirm, onionPixels, animation, epoch = 0, onSaveProject, onOpenProject }: EditorProps) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -127,13 +141,20 @@ export default function Editor({ doc, setDoc, onNotice, onConfirm, onionPixels, 
   const layerSigRef = useRef("");
   const imageInputRef = useRef<HTMLInputElement>(null);
   const projectInputRef = useRef<HTMLInputElement>(null);
+  const paletteFileInputRef = useRef<HTMLInputElement>(null);
   const [, setVersion] = useState(0);
   const refresh = () => setVersion((v) => v + 1);
 
   const [tool, setTool] = useState<Tool>("pencil");
-  const [color, setColor] = useState<string>(DEFAULT_PALETTE.colors[3]);
-  const [colorText, setColorText] = useState<string>(DEFAULT_PALETTE.colors[3]);
-  const [palette, setPalette] = useState<Palette>(DEFAULT_PALETTE);
+  const [color, setColor] = useState<string>(palette.colors[3] ?? "#ef7d57");
+  const [colorText, setColorText] = useState<string>(palette.colors[3] ?? "#ef7d57");
+  const [paletteName, setPaletteName] = useState(palette.name);
+  const [paletteImportOpen, setPaletteImportOpen] = useState(false);
+  const [paletteImportSource, setPaletteImportSource] = useState(BUILTIN_PALETTES[0]?.id ?? "");
+  const [paletteImportTarget, setPaletteImportTarget] = useState(customPalettes[0]?.id ?? "");
+  const [paletteImportColors, setPaletteImportColors] = useState<string[]>([]);
+  const [draggedColorIndex, setDraggedColorIndex] = useState<number | null>(null);
+  const previousPaletteId = useRef(palette.id);
   const [zoom, setZoom] = useState(8);
   const [showGrid, setShowGrid] = useState(true);
   const [activeLayer, setActiveLayer] = useState(0);
@@ -144,6 +165,144 @@ export default function Editor({ doc, setDoc, onNotice, onConfirm, onionPixels, 
   const [imageImportBusy, setImageImportBusy] = useState(false);
 
   const askConfirm = useCallback((message: string) => onConfirm(message), [onConfirm]);
+
+  const paletteEditable = palette.source === "custom";
+  const paletteDisplayName = palette.id === "custom-default" && palette.name === "自定义" ? t("paletteCustom") : palette.name;
+
+  const displayPaletteName = (item: Palette) => (
+    item.id === "custom-default" && item.name === "自定义" ? t("paletteCustom") : item.name
+  );
+
+  useEffect(() => {
+    setPaletteName(paletteDisplayName);
+    if (previousPaletteId.current !== palette.id && palette.colors.length > 0) {
+      previousPaletteId.current = palette.id;
+      setColor(palette.colors[0]);
+      setColorText(palette.colors[0]);
+    }
+  }, [palette.id, paletteDisplayName, palette.colors]);
+
+  const commitCustomPalette = (next: Palette, palettes = customPalettes.map((item) => item.id === next.id ? next : item)) => {
+    onCustomPalettesChange(palettes);
+    onPaletteChange(next);
+  };
+
+  const selectPalette = (id: string) => {
+    const next = [...customPalettes, ...BUILTIN_PALETTES].find((item) => item.id === id);
+    if (!next) return;
+    onPaletteChange(next);
+  };
+
+  const addCustomPalette = () => {
+    const base = t("paletteCustom");
+    let name = base;
+    let index = 2;
+    while (customPalettes.some((item) => item.name === name)) name = `${base} ${index++}`;
+    const next = createCustomPalette(name, []);
+    onCustomPalettesChange([...customPalettes, next]);
+    onPaletteChange(next);
+  };
+
+  const renameCustomPalette = () => {
+    if (!paletteEditable) return;
+    const nextName = paletteName.trim() || t("paletteCustom");
+    if (palette.id === "custom-default" && palette.name === "自定义" && nextName === t("paletteCustom")) return;
+    if (nextName === palette.name) return;
+    commitCustomPalette({ ...palette, name: nextName });
+  };
+
+  const deleteCustomPalette = async () => {
+    if (!paletteEditable || customPalettes.length <= 1) {
+      if (paletteEditable) onNotice?.(t("paletteKeepOne"));
+      return;
+    }
+    if (!(await askConfirm(t("paletteDeleteConfirm", { name: paletteDisplayName })))) return;
+    const nextPalettes = customPalettes.filter((item) => item.id !== palette.id);
+    onCustomPalettesChange(nextPalettes);
+    onPaletteChange(nextPalettes[0]);
+  };
+
+  const copyPaletteToCustom = () => {
+    const base = palette.name;
+    let name = base;
+    let index = 2;
+    while (customPalettes.some((item) => item.name === name)) name = `${base} ${index++}`;
+    const next = createCustomPalette(name, palette.colors);
+    onCustomPalettesChange([...customPalettes, next]);
+    onPaletteChange(next);
+    onNotice?.(t("paletteCopied", { name: next.name }));
+  };
+
+  const addCurrentColor = () => {
+    if (!paletteEditable) return;
+    const rgb = parseHex(colorText);
+    if (!rgb) return;
+    const nextColor = rgbToHex(rgb[0], rgb[1], rgb[2]);
+    const colors = normalizePaletteColors([...palette.colors, nextColor]);
+    commitCustomPalette({ ...palette, colors });
+    setColor(nextColor);
+    setColorText(nextColor);
+  };
+
+  const removePaletteColor = (index: number) => {
+    if (!paletteEditable) return;
+    commitCustomPalette({ ...palette, colors: palette.colors.filter((_, i) => i !== index) });
+  };
+
+  const movePaletteColor = (from: number, to: number) => {
+    if (!paletteEditable || to < 0 || to >= palette.colors.length) return;
+    const colors = [...palette.colors];
+    const [moved] = colors.splice(from, 1);
+    colors.splice(to, 0, moved);
+    commitCustomPalette({ ...palette, colors });
+  };
+
+  const openPaletteImport = () => {
+    const source = BUILTIN_PALETTES[0];
+    setPaletteImportSource(source?.id ?? "");
+    setPaletteImportTarget(paletteEditable ? palette.id : (customPalettes[0]?.id ?? ""));
+    setPaletteImportColors([]);
+    setPaletteImportOpen(true);
+  };
+
+  const importPresetColors = () => {
+    const source = BUILTIN_PALETTES.find((item) => item.id === paletteImportSource);
+    const target = customPalettes.find((item) => item.id === paletteImportTarget);
+    if (!source || !target || paletteImportColors.length === 0) return;
+    const next = { ...target, colors: normalizePaletteColors([...target.colors, ...paletteImportColors]) };
+    const nextPalettes = customPalettes.map((item) => item.id === next.id ? next : item);
+    onCustomPalettesChange(nextPalettes);
+    onPaletteChange(next);
+    setPaletteImportOpen(false);
+    onNotice?.(t("paletteImported", { count: paletteImportColors.length, name: target.name }));
+  };
+
+  const importPaletteFile = async (file: File) => {
+    const imported = parsePaletteText(await file.text(), file.name);
+    if (!imported) {
+      onNotice?.(t("paletteFileInvalid"));
+      return;
+    }
+    let name = imported.name;
+    let index = 2;
+    while (customPalettes.some((item) => item.name === name)) name = `${imported.name} ${index++}`;
+    const next = { ...imported, name };
+    onCustomPalettesChange([...customPalettes, next]);
+    onPaletteChange(next);
+    onNotice?.(t("paletteFileImported", { name: next.name, count: next.colors.length }));
+  };
+
+  const downloadPaletteText = (extension: "json" | "gpl") => {
+    const text = extension === "json" ? paletteToJson(palette) : paletteToGpl(palette);
+    const blob = new Blob([text], { type: extension === "json" ? "application/json" : "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${palette.name || "pixelpaint-palette"}.${extension}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    onNotice?.(t("paletteExported", { format: extension.toUpperCase() }));
+  };
 
   const drag = useRef({ drawing: false, tool: "pencil" as Tool, x: 0, y: 0, lastX: 0, lastY: 0 });
 
@@ -741,6 +900,7 @@ export default function Editor({ doc, setDoc, onNotice, onConfirm, onionPixels, 
   };
 
   return (
+    <>
     <div className="editor-layout">
       {/* 工具条 */}
       <aside className="card tool-panel" aria-label={t("drawingTools")}>
@@ -887,35 +1047,77 @@ export default function Editor({ doc, setDoc, onNotice, onConfirm, onionPixels, 
         <div className="card palette-card">
           <div className="panel-head">
             <h2 className="card-title">{t("palette")}</h2>
+            <div className="palette-head-actions">
+              <button type="button" className="mini-btn" onClick={addCustomPalette} title={t("paletteNew")} aria-label={t("paletteNew")}>＋</button>
+              <button type="button" className="mini-btn" onClick={openPaletteImport} title={t("paletteImportPreset")} aria-label={t("paletteImportPreset")}>⇩</button>
+            </div>
           </div>
-          <label className="field-label" htmlFor="palette-select">{t("palettePreset")}</label>
+          <label className="field-label" htmlFor="palette-select">{t("paletteCurrent")}</label>
           <select
             id="palette-select"
             className="num-input"
             style={{ width: "100%", marginBottom: 10 }}
-            value={palette.name}
-            onChange={(e) => {
-              const p = PRESET_PALETTES.find((x) => x.name === e.target.value);
-              if (p) setPalette(p);
-            }}
+            value={palette.id}
+            onChange={(e) => selectPalette(e.target.value)}
           >
-            {PRESET_PALETTES.map((p) => (
-              <option key={p.name} value={p.name}>
-                {p.name === "自动" ? t("paletteAuto") : p.name === "灰度" ? t("paletteGrayscale") : p.name}
-              </option>
-            ))}
+            <optgroup label={t("paletteMy") }>
+              {customPalettes.map((item) => <option key={item.id} value={item.id}>{displayPaletteName(item)}</option>)}
+            </optgroup>
+            <optgroup label={t("paletteBuiltIn") }>
+              {BUILTIN_PALETTES.map((item) => <option key={item.id} value={item.id}>{item.name === "灰度" ? t("paletteGrayscale") : item.name}</option>)}
+            </optgroup>
           </select>
-          <div className="palette-grid">
-            {palette.colors.map((c) => (
-              <button
-                key={c}
-                type="button"
-                className={`swatch ${color.toLowerCase() === c.toLowerCase() ? "active" : ""}`}
-                style={{ background: c }}
-                onClick={() => { setColor(c); setColorText(c); }}
-                title={c}
-                aria-label={t("color", { value: c })}
+          {paletteEditable ? (
+            <div className="palette-name-row">
+              <label className="sr-only" htmlFor="palette-name">{t("paletteName")}</label>
+              <input
+                id="palette-name"
+                className="text-input"
+                value={paletteName}
+                onChange={(e) => setPaletteName(e.target.value)}
+                onBlur={renameCustomPalette}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); renameCustomPalette(); e.currentTarget.blur(); } }}
+                aria-label={t("paletteName")}
               />
+              <button type="button" className="mini-btn danger" onClick={() => void deleteCustomPalette()} title={t("paletteDelete")} aria-label={t("paletteDelete")}>✕</button>
+            </div>
+          ) : (
+            <div className="palette-readonly-row">
+              <span className="field-hint">{t("paletteReadonly")}</span>
+              <button type="button" className="btn-ghost" onClick={copyPaletteToCustom}>{t("paletteCopyToCustom")}</button>
+            </div>
+          )}
+          <div className="palette-grid">
+            {palette.colors.length === 0 && <p className="palette-empty">{t("paletteEmpty")}</p>}
+            {palette.colors.map((c, index) => (
+              <div
+                key={`${c}-${index}`}
+                className="palette-swatch-item"
+                draggable={paletteEditable}
+                onDragStart={() => setDraggedColorIndex(index)}
+                onDragOver={(e) => { if (paletteEditable) e.preventDefault(); }}
+                onDrop={() => {
+                  if (draggedColorIndex !== null && draggedColorIndex !== index) movePaletteColor(draggedColorIndex, index);
+                  setDraggedColorIndex(null);
+                }}
+                onDragEnd={() => setDraggedColorIndex(null)}
+              >
+                <button
+                  type="button"
+                  className={`swatch ${color.toLowerCase() === c.toLowerCase() ? "active" : ""}`}
+                  style={{ background: c }}
+                  onClick={() => { setColor(c); setColorText(c); }}
+                  title={c}
+                  aria-label={t("color", { value: c })}
+                />
+                {paletteEditable && (
+                  <div className="palette-swatch-actions">
+                    <button type="button" className="palette-swatch-action" onClick={() => movePaletteColor(index, index - 1)} disabled={index === 0} title={t("moveColorLeft")} aria-label={t("moveColorLeft")}>‹</button>
+                    <button type="button" className="palette-swatch-action" onClick={() => movePaletteColor(index, index + 1)} disabled={index === palette.colors.length - 1} title={t("moveColorRight")} aria-label={t("moveColorRight")}>›</button>
+                    <button type="button" className="palette-swatch-action danger" onClick={() => removePaletteColor(index)} title={t("removeColor")} aria-label={`${t("removeColor")} ${c}`}>×</button>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
           <div className="color-row">
@@ -940,6 +1142,26 @@ export default function Editor({ doc, setDoc, onNotice, onConfirm, onionPixels, 
               aria-invalid={parseHex(colorText) === null}
               spellCheck={false}
             />
+          </div>
+          <div className="palette-actions">
+            <button type="button" className="btn-primary" onClick={addCurrentColor} disabled={!paletteEditable || parseHex(colorText) === null}>{t("paletteAddColor")}</button>
+            <button type="button" className="btn-ghost" onClick={() => paletteFileInputRef.current?.click()}>{t("paletteImportFile")}</button>
+            <input
+              ref={paletteFileInputRef}
+              type="file"
+              accept=".gpl,.json,.txt,.css,.palette,text/plain,text/css,application/json"
+              hidden
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void importPaletteFile(file);
+                e.target.value = "";
+              }}
+            />
+          </div>
+          <div className="palette-export-actions">
+            <span className="field-hint">{t("paletteExport")}</span>
+            <button type="button" className="mini-btn" onClick={() => downloadPaletteText("json")} title={t("paletteExportJson")}>{t("paletteExportJson")}</button>
+            <button type="button" className="mini-btn" onClick={() => downloadPaletteText("gpl")} title={t("paletteExportGpl")}>{t("paletteExportGpl")}</button>
           </div>
           {parseHex(colorText) === null && (
             <p style={{ fontSize: 12, color: "var(--amber)", marginTop: 6 }}>
@@ -1070,5 +1292,60 @@ export default function Editor({ doc, setDoc, onNotice, onConfirm, onionPixels, 
         </div>
       </aside>
     </div>
+    {paletteImportOpen && (
+      <div className="modal-overlay palette-import-overlay" role="presentation">
+        <div className="modal palette-import-modal" role="dialog" aria-modal="true" aria-labelledby="palette-import-title">
+          <h2 id="palette-import-title">{t("paletteImportTitle")}</h2>
+          <p className="modal-hint">{t("paletteImportHint")}</p>
+          <label className="field-label" htmlFor="palette-import-source">{t("paletteImportSource")}</label>
+          <select
+            id="palette-import-source"
+            className="num-input"
+            style={{ width: "100%", marginBottom: 10 }}
+            value={paletteImportSource}
+            onChange={(e) => { setPaletteImportSource(e.target.value); setPaletteImportColors([]); }}
+          >
+            {BUILTIN_PALETTES.map((item) => <option key={item.id} value={item.id}>{item.name === "灰度" ? t("paletteGrayscale") : item.name}</option>)}
+          </select>
+          <label className="field-label" htmlFor="palette-import-target">{t("paletteImportTarget")}</label>
+          <select
+            id="palette-import-target"
+            className="num-input"
+            style={{ width: "100%", marginBottom: 12 }}
+            value={paletteImportTarget}
+            onChange={(e) => setPaletteImportTarget(e.target.value)}
+          >
+            {customPalettes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+          <div className="palette-import-toolbar">
+            <span className="field-hint">{t("paletteSelectColors", { count: paletteImportColors.length })}</span>
+            <button type="button" className="mini-btn" onClick={() => setPaletteImportColors(BUILTIN_PALETTES.find((item) => item.id === paletteImportSource)?.colors ?? [])}>{t("paletteSelectAll")}</button>
+            <button type="button" className="mini-btn" onClick={() => setPaletteImportColors([])}>{t("paletteClearSelection")}</button>
+          </div>
+          <div className="palette-import-grid">
+            {(BUILTIN_PALETTES.find((item) => item.id === paletteImportSource)?.colors ?? []).map((value) => {
+              const selected = paletteImportColors.includes(value);
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  className={`swatch ${selected ? "active" : ""}`}
+                  style={{ background: value }}
+                  onClick={() => setPaletteImportColors((colors) => selected ? colors.filter((item) => item !== value) : [...colors, value])}
+                  aria-label={t("color", { value })}
+                  aria-pressed={selected}
+                  title={value}
+                />
+              );
+            })}
+          </div>
+          <div className="modal-actions">
+            <button type="button" className="btn-ghost" onClick={() => setPaletteImportOpen(false)}>{t("cancel")}</button>
+            <button type="button" className="btn-primary" onClick={importPresetColors} disabled={paletteImportColors.length === 0 || customPalettes.length === 0}>{t("paletteImportSelected")}</button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

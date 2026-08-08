@@ -5,6 +5,8 @@ import {
   addFrame, clampIndex, createAnim, deleteFrame, moveFrame, type PixelAnim,
 } from "./lib/anim";
 import { composite, type PixelDoc } from "./lib/pixelDoc";
+import { CUSTOM_PALETTE, type Palette } from "./lib/palette";
+import { loadCustomPalettes, saveCustomPalettes } from "./lib/paletteStore";
 import { clearAutosave, downloadProject, loadAutosave, readProjectFile, saveAutosave } from "./lib/persist";
 import { useI18n } from "./lib/i18n";
 
@@ -42,7 +44,11 @@ function hasContent(doc: PixelDoc): boolean {
 export default function App() {
   const { language, setLanguage, t } = useI18n();
   const [tab, setTab] = useState<Tab>("editor");
-  const [anim, setAnim] = useState<PixelAnim>(() => createAnim(32, 32, 8, t("layerName", { index: 1 })));
+  const [customPalettes, setCustomPalettes] = useState<Palette[]>(() => loadCustomPalettes());
+  const [anim, setAnim] = useState<PixelAnim>(() => {
+    const initialPalette = loadCustomPalettes()[0] ?? CUSTOM_PALETTE;
+    return createAnim(32, 32, 8, t("layerName", { index: 1 }), initialPalette);
+  });
   const [frameIndex, setFrameIndex] = useState(0);
   const [epoch, setEpoch] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -56,6 +62,7 @@ export default function App() {
   const promptQueueRef = useRef<PromptRequest[]>([]);
   const promptIdRef = useRef(0);
   const tRef = useRef(t);
+  const customPalettesRef = useRef(customPalettes);
   tRef.current = t;
 
   const enqueuePrompt = useCallback((request: PromptRequest) => {
@@ -123,6 +130,39 @@ export default function App() {
 
   const doc = anim.frames[frameIndex] ?? anim.frames[0];
   const frames = anim.frames;
+  const activePalette = anim.palette ?? customPalettes[0] ?? CUSTOM_PALETTE;
+
+  const adoptLoadedAnim = useCallback((next: PixelAnim): PixelAnim => {
+    const importedPalette = next.palette;
+    if (!importedPalette) {
+      return { ...next, palette: customPalettesRef.current[0] ?? CUSTOM_PALETTE };
+    }
+    if (importedPalette.source === "custom") {
+      const exists = customPalettesRef.current.some((palette) => palette.id === importedPalette.id);
+      const nextPalettes = exists
+        ? customPalettesRef.current.map((palette) => palette.id === importedPalette.id ? importedPalette : palette)
+        : [...customPalettesRef.current, importedPalette];
+      customPalettesRef.current = nextPalettes;
+      setCustomPalettes(nextPalettes);
+      return { ...next, palette: importedPalette };
+    }
+    return next;
+  }, []);
+
+  const updatePalette = useCallback((palette: Palette) => {
+    setAnim((current) => ({ ...current, palette }));
+  }, []);
+
+  const updateCustomPalettes = useCallback((palettes: Palette[]) => {
+    customPalettesRef.current = palettes;
+    setCustomPalettes(palettes);
+    setAnim((current) => {
+      const active = current.palette;
+      if (!active) return { ...current, palette: palettes[0] ?? CUSTOM_PALETTE };
+      const updated = palettes.find((palette) => palette.id === active.id);
+      return updated ? { ...current, palette: updated } : current;
+    });
+  }, []);
 
   // 更新当前帧（Editor 编辑时调用）
   const setDoc = useCallback((d: PixelDoc) => {
@@ -194,7 +234,7 @@ export default function App() {
     (async () => {
       const draft = await loadAutosave();
       if (alive && draft) {
-        setAnim(draft);
+        setAnim(adoptLoadedAnim(draft));
         setFrameIndex(clampIndex(0, draft.frames.length));
         setEpoch((e) => e + 1);
         showNotice(tRef.current("draftRestored", {
@@ -206,7 +246,12 @@ export default function App() {
       restoringRef.current = false;
     })();
     return () => { alive = false; };
-  }, [showNotice]);
+  }, [adoptLoadedAnim, showNotice]);
+
+  useEffect(() => {
+    customPalettesRef.current = customPalettes;
+    saveCustomPalettes(customPalettes);
+  }, [customPalettes]);
 
   // 自动保存草稿（防抖）
   useEffect(() => {
@@ -245,7 +290,7 @@ export default function App() {
   const startOver = async () => {
     if (!(await askConfirm(t("clearCanvasConfirm")))) return;
     clearAutosave();
-    setAnim(createAnim(32, 32, 8, t("layerName", { index: 1 })));
+    setAnim(createAnim(32, 32, 8, t("layerName", { index: 1 }), activePalette));
     setFrameIndex(0);
     setEpoch((e) => e + 1);
     setPlaying(false);
@@ -265,12 +310,12 @@ export default function App() {
       return;
     }
     if (!(await askConfirm(t("replaceProjectConfirm", { count: next.frames.length })))) return;
-    setAnim(next);
+    setAnim(adoptLoadedAnim(next));
     setFrameIndex(0);
     setEpoch((e) => e + 1);
     setPlaying(false);
     showNotice(t("projectOpened", { count: next.frames.length, fps: next.fps }));
-  }, [askConfirm, showNotice, t]);
+  }, [adoptLoadedAnim, askConfirm, showNotice, t]);
 
   // Tab 方向键导航（ARIA tabs 规范）
   const onTabKeyDown = (e: React.KeyboardEvent) => {
@@ -344,6 +389,10 @@ export default function App() {
             <Editor
               doc={doc}
               setDoc={setDoc}
+              palette={activePalette}
+              customPalettes={customPalettes}
+              onPaletteChange={updatePalette}
+              onCustomPalettesChange={updateCustomPalettes}
               onNotice={showNotice}
               onConfirm={askConfirm}
               epoch={epoch}

@@ -6,6 +6,7 @@
 
 import { uid, type Layer, type PixelDoc } from "./pixelDoc";
 import type { PixelAnim } from "./anim";
+import { normalizePaletteColors, type Palette } from "./palette";
 
 export const AUTOSAVE_KEY = "pixelpaint:autosave:v2";
 export const PROJECT_EXT = ".pixelpaint.json";
@@ -28,13 +29,19 @@ export interface SerializedDoc {
   layers: SerializedLayer[];
 }
 
-// v2：多帧工程
+// v3：多帧工程 + 当前调色板
 export interface SerializedProject {
   format: "pixelpaint";
-  version: 2;
+  version: 3;
   fps: number;
   savedAt: number;
   frames: SerializedDoc[];
+  palette?: {
+    id: string;
+    name: string;
+    colors: string[];
+    source: Palette["source"];
+  };
 }
 
 function layerToPng(layer: Layer, width: number, height: number): string {
@@ -106,17 +113,38 @@ export async function deserializeDoc(data: unknown): Promise<PixelDoc | null> {
 
 // ---------- 多帧工程 ----------
 export function serializeAnim(anim: PixelAnim): SerializedProject {
-  return {
+  const project: SerializedProject = {
     format: "pixelpaint",
-    version: 2,
+    version: 3,
     fps: anim.fps,
     savedAt: Date.now(),
     frames: anim.frames.map((f) => serializeDoc(f)),
   };
+  if (anim.palette) {
+    project.palette = {
+      id: anim.palette.id,
+      name: anim.palette.name,
+      colors: normalizePaletteColors(anim.palette.colors),
+      source: anim.palette.source,
+    };
+  }
+  return project;
+}
+
+function deserializePalette(data: unknown): Palette | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const palette = data as Partial<Palette>;
+  if (typeof palette.id !== "string" || typeof palette.name !== "string" || !Array.isArray(palette.colors)) return undefined;
+  return {
+    id: palette.id,
+    name: palette.name.trim() || "自定义",
+    colors: normalizePaletteColors(palette.colors),
+    source: palette.source === "builtin" || palette.source === "auto" ? palette.source : "custom",
+  };
 }
 
 export async function deserializeAnim(data: unknown): Promise<PixelAnim | null> {
-  const d = data as { format?: string; version?: number; fps?: number; frames?: SerializedDoc[] } | null;
+  const d = data as { format?: string; version?: number; fps?: number; frames?: SerializedDoc[]; palette?: unknown } | null;
   if (!d || d.format !== "pixelpaint") return null;
 
   // v1 单帧兼容：把旧工程当成单帧动画
@@ -133,7 +161,7 @@ export async function deserializeAnim(data: unknown): Promise<PixelAnim | null> 
   }
   if (frames.length === 0) return null;
   const fps = typeof d.fps === "number" && d.fps >= 1 && d.fps <= 60 ? Math.round(d.fps) : 8;
-  return { frames, fps };
+  return { frames, fps, palette: deserializePalette(d.palette) };
 }
 
 // ---------- 自动草稿（localStorage） ----------
