@@ -13,7 +13,7 @@ interface CutoutProps {
   inputFile: File | null;
   resultFile: File | null;
   onResult: (file: File) => void;
-  onImport: (doc: PixelDoc) => void;
+  onImport: (doc: PixelDoc) => void | Promise<void>;
   onNotice?: (msg: string) => void;
 }
 
@@ -112,7 +112,7 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
       ctx.drawImage(bitmap, 0, 0);
       bitmap.close();
       const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      onImport(docFromPixels(image.data, image.width, image.height, t("background")));
+      void onImport(docFromPixels(image.data, image.width, image.height, t("background")));
     } catch {
       setError(t("sendBackgroundError"));
     }

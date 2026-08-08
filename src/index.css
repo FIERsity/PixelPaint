@@ -527,6 +527,43 @@ main { flex: 1; padding-bottom: 20px; }
 .modal textarea:focus { border-color: var(--primary); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
+/* ---------- 统一提示弹窗 ---------- */
+.prompt-overlay {
+  z-index: 110;
+  align-items: flex-start;
+  overflow-y: auto;
+  padding-top: clamp(72px, 14vh, 140px);
+}
+.prompt-modal { width: min(100%, 480px); }
+.prompt-kicker {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 10px; color: var(--muted); font-size: 12px;
+}
+.prompt-kind {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-weight: 700;
+}
+.prompt-kind > span {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 999px; font-size: 13px; line-height: 1;
+}
+.prompt-kind.notice { color: var(--primary-dark); }
+.prompt-kind.notice > span { color: #fff; background: var(--primary); }
+.prompt-kind.confirm { color: var(--amber); }
+.prompt-kind.confirm > span { color: #fff; background: var(--amber); }
+.prompt-position { font-family: var(--mono); font-size: 11px; }
+.prompt-message { font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.prompt-queue {
+  margin-top: 16px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
+}
+.prompt-queue-head {
+  display: flex; justify-content: space-between; gap: 8px;
+  color: var(--muted); font-size: 11px; font-weight: 600;
+}
+.prompt-queue ol { margin: 6px 0 0 18px; color: var(--muted); font-size: 12px; }
+.prompt-queue li { padding-left: 3px; line-height: 1.55; }
+
 /* 响应式覆盖放在组件样式之后，确保窄屏规则不会被基础样式重新覆盖。 */
 @media (max-width: 920px) {
   .tool-panel {

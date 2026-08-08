@@ -45,6 +45,7 @@ interface EditorProps {
   doc: PixelDoc;
   setDoc: (d: PixelDoc) => void;
   onNotice?: (msg: string) => void;
+  onConfirm: (message: string) => Promise<boolean>;
   /** 洋葱皮：相邻帧的合成位图（非当前帧） */
   onionPixels?: Uint8ClampedArray | null;
   animation?: AnimationProps;
@@ -116,7 +117,7 @@ function hasVisiblePixels(doc: PixelDoc) {
   return false;
 }
 
-export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, epoch = 0, onSaveProject, onOpenProject }: EditorProps) {
+export default function Editor({ doc, setDoc, onNotice, onConfirm, onionPixels, animation, epoch = 0, onSaveProject, onOpenProject }: EditorProps) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -141,6 +142,8 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
   const [sizeH, setSizeH] = useState(doc.height);
   const [exportScale, setExportScale] = useState(4);
   const [imageImportBusy, setImageImportBusy] = useState(false);
+
+  const askConfirm = useCallback((message: string) => onConfirm(message), [onConfirm]);
 
   const drag = useRef({ drawing: false, tool: "pencil" as Tool, x: 0, y: 0, lastX: 0, lastY: 0 });
 
@@ -525,7 +528,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
         onNotice?.(t("notPixelArtNotice"));
         return;
       }
-      if (hasVisiblePixels(doc) && !confirm(t("replaceCurrentFrameConfirm"))) return;
+      if (hasVisiblePixels(doc) && !(await askConfirm(t("replaceCurrentFrameConfirm")))) return;
 
       const next = docFromPixels(image.data, image.width, image.height, t("importedImageLayer"));
       withHistory(() => {
@@ -554,13 +557,13 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
     setActiveLayer(doc.layers.length);
   });
 
-  const removeLayer = (i: number) => {
+  const removeLayer = async (i: number) => {
     if (doc.layers.length <= 1) {
       onNotice?.(t("atLeastOneLayer"));
       return;
     }
     const name = localizeLayerName(doc.layers[i]?.name ?? t("unnamedLayer"));
-    if (!confirm(t("removeLayerConfirm", { name }))) return;
+    if (!(await askConfirm(t("removeLayerConfirm", { name })))) return;
     withHistory(() => {
       const layers = doc.layers.filter((_, idx) => idx !== i);
       setDoc({ ...doc, layers });
@@ -587,8 +590,8 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
     setDoc({ ...doc, layers: doc.layers.map((l, idx) => (idx === i ? { ...l, opacity } : l)) });
   };
 
-  const clearLayer = () => {
-    if (!confirm(t("clearLayerConfirm"))) return;
+  const clearLayer = async () => {
+    if (!(await askConfirm(t("clearLayerConfirm")))) return;
     withHistory(() => {
       const layer = doc.layers[layerIndex];
       if (layer) layer.pixels.fill(0);
@@ -601,22 +604,22 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
   // ---------- 画布尺寸 ----------
   const clampSize = (v: number) => Math.max(1, Math.min(512, Math.round(v) || 1));
 
-  const applyResize = () => {
+  const applyResize = async () => {
     const w = clampSize(sizeW);
     const h = clampSize(sizeH);
     if (w === doc.width && h === doc.height) return;
     const shrinking = w < doc.width || h < doc.height;
-    if (shrinking && !confirm(t("resizeConfirm", {
+    if (shrinking && !(await askConfirm(t("resizeConfirm", {
       fromW: doc.width, fromH: doc.height, toW: w, toH: h,
-    }))) return;
+    })))) return;
     withHistory(() => setDoc(resizeDoc(doc, w, h)));
     onNotice?.(t("resized", { width: w, height: h }));
   };
 
-  const newCanvas = () => {
+  const newCanvas = async () => {
     const w = clampSize(sizeW);
     const h = clampSize(sizeH);
-    if (!confirm(t("newCanvasConfirm", { width: w, height: h }))) return;
+    if (!(await askConfirm(t("newCanvasConfirm", { width: w, height: h })))) return;
     withHistory(() => {
       setDoc(createDoc(w, h, t("layerName", { index: 1 })));
       setActiveLayer(0);
@@ -872,7 +875,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
                 <button type="button" className="frame-op" onClick={animation.onFrameDuplicate} title={t("duplicateFrame")} aria-label={t("duplicateFrame")}>⧉</button>
                 <button type="button" className="frame-op" onClick={() => animation.onFrameShift(-1)} title={t("moveLeft")} aria-label={t("moveLeft")}>‹</button>
                 <button type="button" className="frame-op" onClick={() => animation.onFrameShift(1)} title={t("moveRight")} aria-label={t("moveRight")}>›</button>
-                <button type="button" className="frame-op danger" onClick={animation.onFrameDelete} title={t("deleteFrame")} aria-label={t("deleteFrame")}>✕</button>
+                <button type="button" className="frame-op danger" onClick={() => void animation.onFrameDelete()} title={t("deleteFrame")} aria-label={t("deleteFrame")}>✕</button>
               </div>
             </div>
           </div>
@@ -949,7 +952,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
           <div className="panel-head">
             <h2 className="card-title">{t("layers")}</h2>
             <div style={{ display: "flex", gap: 6 }}>
-              <button type="button" className="btn-ghost" onClick={clearLayer}>{t("clear")}</button>
+              <button type="button" className="btn-ghost" onClick={() => void clearLayer()}>{t("clear")}</button>
               <button type="button" className="btn-ghost" onClick={addLayer}>{t("newLayer")}</button>
             </div>
           </div>
@@ -980,7 +983,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
                 <div className="layer-actions">
                   <button type="button" className="mini-btn" onClick={(e) => { e.stopPropagation(); moveLayer(i, 1); }} title={t("moveUp")} aria-label={t("moveUp")}>↑</button>
                   <button type="button" className="mini-btn" onClick={(e) => { e.stopPropagation(); moveLayer(i, -1); }} title={t("moveDown")} aria-label={t("moveDown")}>↓</button>
-                  <button type="button" className="mini-btn danger icon-btn" onClick={(e) => { e.stopPropagation(); removeLayer(i); }} title={t("removeLayer")} aria-label={`${t("removeLayer")} ${localizeLayerName(l.name)}`}>
+                  <button type="button" className="mini-btn danger icon-btn" onClick={(e) => { e.stopPropagation(); void removeLayer(i); }} title={t("removeLayer")} aria-label={`${t("removeLayer")} ${localizeLayerName(l.name)}`}>
                     <PixelIcon data={Trash} size={13} />
                   </button>
                 </div>
@@ -1001,8 +1004,8 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
               onChange={(e) => setSizeH(clampSize(Number(e.target.value)))} />
           </div>
           <div className="size-row canvas-resize-actions">
-            <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={applyResize}>{t("resizeKeepContent")}</button>
-            <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={newCanvas}>{t("newBlankCanvas")}</button>
+            <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={() => void applyResize()}>{t("resizeKeepContent")}</button>
+            <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={() => void newCanvas()}>{t("newBlankCanvas")}</button>
           </div>
 
           <div className="tool-divider" />

@@ -21,7 +21,7 @@ const SIZE_PRESETS = [
 type SizePreset = (typeof SIZE_PRESETS)[number]["value"] | "custom";
 
 interface ConvertProps {
-  onImport: (doc: PixelDoc) => void;
+  onImport: (doc: PixelDoc) => void | Promise<void>;
   onNotice?: (msg: string) => void;
 }
 
@@ -481,7 +481,7 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
                   className="btn-primary"
                   disabled={!result || busy}
                   onClick={() => {
-                    if (result) onImport(docFromPixels(result.pixels, result.w, result.h, t("pixelize")));
+                    if (result) void onImport(docFromPixels(result.pixels, result.w, result.h, t("pixelize")));
                   }}
                 >
                   {busy ? t("converting") : t("sendToCanvas")}

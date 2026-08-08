@@ -10,6 +10,10 @@ import { useI18n } from "./lib/i18n";
 
 type Tab = "editor" | "convert";
 
+type PromptRequest =
+  | { id: number; kind: "notice"; message: string }
+  | { id: number; kind: "confirm"; message: string; resolve: (accepted: boolean) => void };
+
 const TABS: Array<{ id: Tab; labelKey: string }> = [
   { id: "editor", labelKey: "editor" },
   { id: "convert", labelKey: "convert" },
@@ -44,19 +48,38 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [onion, setOnion] = useState(false);
   const [onionNext, setOnionNext] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [promptQueue, setPromptQueue] = useState<PromptRequest[]>([]);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackSending, setFeedbackSending] = useState(false);
   const restoringRef = useRef(true);
-  const noticeTimer = useRef<number | undefined>(undefined);
+  const promptQueueRef = useRef<PromptRequest[]>([]);
+  const promptIdRef = useRef(0);
   const tRef = useRef(t);
   tRef.current = t;
 
+  const enqueuePrompt = useCallback((request: PromptRequest) => {
+    const next = [...promptQueueRef.current, request];
+    promptQueueRef.current = next;
+    setPromptQueue(next);
+  }, []);
+
   const showNotice = useCallback((msg: string) => {
-    setNotice(msg);
-    window.clearTimeout(noticeTimer.current);
-    noticeTimer.current = window.setTimeout(() => setNotice(null), 3600);
+    if (promptQueueRef.current.some((item) => item.kind === "notice" && item.message === msg)) return;
+    enqueuePrompt({ id: ++promptIdRef.current, kind: "notice", message: msg });
+  }, [enqueuePrompt]);
+
+  const askConfirm = useCallback((message: string) => new Promise<boolean>((resolve) => {
+    enqueuePrompt({ id: ++promptIdRef.current, kind: "confirm", message, resolve });
+  }), [enqueuePrompt]);
+
+  const finishPrompt = useCallback((accepted: boolean) => {
+    const active = promptQueueRef.current[0];
+    if (!active) return;
+    const next = promptQueueRef.current.slice(1);
+    promptQueueRef.current = next;
+    setPromptQueue(next);
+    if (active.kind === "confirm") active.resolve(accepted);
   }, []);
 
   const closeFeedback = useCallback(() => {
@@ -122,17 +145,17 @@ export default function App() {
     setPlaying(false);
   }, [frameIndex, t]);
 
-  const removeFrame = useCallback(() => {
+  const removeFrame = useCallback(async () => {
     if (frames.length <= 1) {
       showNotice(t("atLeastOneFrame"));
       return;
     }
-    if (!confirm(t("deleteFrameConfirm", { index: frameIndex + 1 }))) return;
+    if (!(await askConfirm(t("deleteFrameConfirm", { index: frameIndex + 1 })))) return;
     setAnim((a) => deleteFrame(a, frameIndex) ?? a);
     setFrameIndex((i) => clampIndex(i, frames.length - 1));
     setEpoch((e) => e + 1);
     setPlaying(false);
-  }, [frames.length, frameIndex, showNotice, t]);
+  }, [askConfirm, frames.length, frameIndex, showNotice, t]);
 
   const shiftFrame = useCallback((dir: -1 | 1) => {
     setAnim((a) => {
@@ -195,11 +218,21 @@ export default function App() {
     return () => window.clearTimeout(t);
   }, [anim, showNotice]);
 
-  useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
+  useEffect(() => {
+    if (promptQueue.length === 0) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        finishPrompt(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [finishPrompt, promptQueue.length]);
 
   // 转像素 / 背景处理结果 -> 画板（覆盖前确认）
-  const handleImport = useCallback((next: PixelDoc) => {
-    if (hasContent(doc) && !confirm(t("replaceCurrentFrameConfirm"))) return;
+  const handleImport = useCallback(async (next: PixelDoc) => {
+    if (hasContent(doc) && !(await askConfirm(t("replaceCurrentFrameConfirm")))) return;
     setAnim((a) => {
       const frames2 = a.frames.map((f, i) => (i === frameIndex ? next : f));
       return { ...a, frames: frames2 };
@@ -207,10 +240,10 @@ export default function App() {
     setTab("editor");
     setEpoch((e) => e + 1);
     showNotice(t("sentToCanvas", { width: next.width, height: next.height }));
-  }, [doc, frameIndex, showNotice, t]);
+  }, [askConfirm, doc, frameIndex, showNotice, t]);
 
-  const startOver = () => {
-    if (!confirm(t("clearCanvasConfirm"))) return;
+  const startOver = async () => {
+    if (!(await askConfirm(t("clearCanvasConfirm")))) return;
     clearAutosave();
     setAnim(createAnim(32, 32, 8, t("layerName", { index: 1 })));
     setFrameIndex(0);
@@ -231,13 +264,13 @@ export default function App() {
       showNotice(t("invalidProject"));
       return;
     }
-    if (!confirm(t("replaceProjectConfirm", { count: next.frames.length }))) return;
+    if (!(await askConfirm(t("replaceProjectConfirm", { count: next.frames.length })))) return;
     setAnim(next);
     setFrameIndex(0);
     setEpoch((e) => e + 1);
     setPlaying(false);
     showNotice(t("projectOpened", { count: next.frames.length, fps: next.fps }));
-  }, [showNotice, t]);
+  }, [askConfirm, showNotice, t]);
 
   // Tab 方向键导航（ARIA tabs 规范）
   const onTabKeyDown = (e: React.KeyboardEvent) => {
@@ -248,6 +281,8 @@ export default function App() {
       setTab(TABS[next].id);
     }
   };
+
+  const activePrompt = promptQueue[0];
 
   return (
     <div className="app-shell">
@@ -310,6 +345,7 @@ export default function App() {
               doc={doc}
               setDoc={setDoc}
               onNotice={showNotice}
+              onConfirm={askConfirm}
               epoch={epoch}
               onionPixels={onionPixels}
               onSaveProject={saveProject}
@@ -344,10 +380,6 @@ export default function App() {
         )}
       </main>
 
-      {notice && (
-        <div className="toast show" role="status" aria-live="polite">{notice}</div>
-      )}
-
       {feedbackOpen && (
         <div
           className="modal-overlay open"
@@ -377,12 +409,58 @@ export default function App() {
         </div>
       )}
 
+      {activePrompt && (
+        <div
+          className="modal-overlay prompt-overlay"
+          role="presentation"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) finishPrompt(false); }}
+        >
+          <div className="modal prompt-modal" role="dialog" aria-modal="true" aria-labelledby="prompt-title">
+            <div className="prompt-kicker">
+              <span className={`prompt-kind ${activePrompt.kind}`}>
+                <span aria-hidden="true">{activePrompt.kind === "confirm" ? "?" : "i"}</span>
+                {activePrompt.kind === "confirm" ? t("confirmTitle") : t("noticeTitle")}
+              </span>
+              {promptQueue.length > 1 && (
+                <span className="prompt-position">{t("promptQueuePosition", { total: promptQueue.length })}</span>
+              )}
+            </div>
+            <h2 id="prompt-title">{activePrompt.kind === "confirm" ? t("confirmTitle") : t("noticeTitle")}</h2>
+            <p className="prompt-message">{activePrompt.message}</p>
+            {promptQueue.length > 1 && (
+              <div className="prompt-queue" aria-label={t("promptQueueLabel")}>
+                <div className="prompt-queue-head">
+                  <span>{t("promptQueueLabel")}</span>
+                  <span>{t("promptQueueCount", { count: promptQueue.length - 1 })}</span>
+                </div>
+                <ol>
+                  {promptQueue.slice(1, 4).map((item) => (
+                    <li key={item.id}>{item.message}</li>
+                  ))}
+                  {promptQueue.length > 4 && <li>{t("promptQueueMore", { count: promptQueue.length - 4 })}</li>}
+                </ol>
+              </div>
+            )}
+            <div className="modal-actions">
+              {activePrompt.kind === "confirm" && (
+                <button type="button" className="btn-ghost" onClick={() => finishPrompt(false)}>
+                  {t("cancel")}
+                </button>
+              )}
+              <button type="button" className="btn-primary" autoFocus onClick={() => finishPrompt(true)}>
+                {activePrompt.kind === "confirm" ? t("confirmAction") : t("promptDismiss")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <footer className="site-footer">
         <div className="container">
           <p>
             {t("footer")}
             {" · "}
-            <button type="button" className="link-btn" onClick={startOver}>{t("clearRestart")}</button>
+            <button type="button" className="link-btn" onClick={() => void startOver()}>{t("clearRestart")}</button>
           </p>
           <p style={{ marginTop: 6 }}>
             {t("iconsBy")} {" "}
