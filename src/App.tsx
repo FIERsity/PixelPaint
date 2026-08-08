@@ -260,6 +260,23 @@ export default function App() {
               <p className="tagline">{t("tagline")}</p>
             </div>
           </div>
+          <nav className="tabs" role="tablist" aria-label={t("workspace")} onKeyDown={onTabKeyDown}>
+            {TABS.map((tabItem) => (
+              <button
+                key={tabItem.id}
+                type="button"
+                role="tab"
+                id={`tab-${tabItem.id}`}
+                aria-selected={tab === tabItem.id}
+                aria-controls={`panel-${tabItem.id}`}
+                tabIndex={tab === tabItem.id ? 0 : -1}
+                className={`tab ${tab === tabItem.id ? "active" : ""}`}
+                onClick={() => setTab(tabItem.id)}
+              >
+                {t(tabItem.labelKey)}
+              </button>
+            ))}
+          </nav>
           <div className="header-actions">
             <div className="lang-switch" role="group" aria-label={t("language")}>
               <button
@@ -282,23 +299,6 @@ export default function App() {
             <button type="button" className="btn-ghost header-feedback" onClick={() => setFeedbackOpen(true)}>
               {t("feedback")}
             </button>
-            <nav className="tabs" role="tablist" aria-label={t("workspace")} onKeyDown={onTabKeyDown}>
-              {TABS.map((tabItem) => (
-                <button
-                  key={tabItem.id}
-                  type="button"
-                  role="tab"
-                  id={`tab-${tabItem.id}`}
-                  aria-selected={tab === tabItem.id}
-                  aria-controls={`panel-${tabItem.id}`}
-                  tabIndex={tab === tabItem.id ? 0 : -1}
-                  className={`tab ${tab === tabItem.id ? "active" : ""}`}
-                  onClick={() => setTab(tabItem.id)}
-                >
-                  {t(tabItem.labelKey)}
-                </button>
-              ))}
-            </nav>
           </div>
         </div>
       </header>
