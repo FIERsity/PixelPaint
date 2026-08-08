@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyPixelChanges, brushOffsets, composite, createDoc, drawLinePoints,
-  floodFill, getPixel, History, putPixel, rectPoints,
+  floodFill, getPixel, History, putPixel,
   resizeDoc, StrokeRecorder,
 } from "./pixelDoc";
 
@@ -53,23 +53,6 @@ describe("brushOffsets", () => {
   it("非法输入被夹到 1", () => {
     expect(brushOffsets(0)).toEqual([[0, 0]]);
     expect(brushOffsets(-3)).toEqual([[0, 0]]);
-  });
-});
-
-describe("rectPoints", () => {
-  it("描边模式只含边框，不含内部", () => {
-    const pts = rectPoints(0, 0, 3, 3, false);
-    expect(pts).toHaveLength(12); // 4×4 边框 = 16-4 内部 = 12
-    expect(pts.some(([x, y]) => x === 1 && y === 1)).toBe(false);
-  });
-  it("填充模式含全部像素", () => {
-    expect(rectPoints(0, 0, 3, 3, true)).toHaveLength(16);
-  });
-  it("坐标顺序颠倒也正常", () => {
-    expect(rectPoints(3, 3, 0, 0, true)).toHaveLength(16);
-  });
-  it("单像素矩形不重复", () => {
-    expect(rectPoints(2, 2, 2, 2, false)).toEqual([[2, 2]]);
   });
 });
 

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  applyPixelChanges, brushOffsets, cloneDoc, composite, createDoc,
+  applyPixelChanges, brushOffsets, cloneDoc, composite, createDoc, docFromPixels,
   drawLinePoints, floodFill, getPixel, History, putPixel,
-  rectPoints, resizeDoc, StrokeRecorder, uid,
+  resizeDoc, StrokeRecorder, uid,
   type Layer, type PixelDoc, type Rgba, type Tool,
 } from "../lib/pixelDoc";
 import { DEFAULT_PALETTE, parseHex, PRESET_PALETTES, rgbToHex, type Palette } from "../lib/palette";
@@ -16,11 +16,12 @@ import { Trash } from "./icons/trash";
 import { Download } from "./icons/download";
 import { Upload } from "./icons/upload";
 import { Line } from "./icons/line";
-import { Rect } from "./icons/rect";
 import PixelIcon from "../lib/PixelIcon";
 import type { PxlKitData } from "../lib/pixelTypes";
 import { checkerStyle } from "../lib/checker";
 import { useI18n } from "../lib/i18n";
+import { encodeGif } from "../lib/gif";
+import { analyzePixelArt } from "../lib/pixelArt";
 
 export interface AnimationProps {
   frames: PixelDoc[];
@@ -61,7 +62,6 @@ const TOOLS: Array<{ id: Tool; labelKey: string; icon: PxlKitData; key: string }
   { id: "picker", labelKey: "picker", icon: Eyedropper, key: "I" },
   { id: "fill", labelKey: "fill", icon: PaintBucket, key: "G" },
   { id: "line", labelKey: "line", icon: Line, key: "L" },
-  { id: "rect", labelKey: "rectangle", icon: Rect, key: "R" },
 ];
 
 const TRANSPARENT: Rgba = [0, 0, 0, 0];
@@ -108,6 +108,14 @@ function FrameThumb({ frame, active, index, onClick }: {
   );
 }
 
+function hasVisiblePixels(doc: PixelDoc) {
+  const pixels = composite(doc);
+  for (let i = 3; i < pixels.length; i += 4) {
+    if (pixels[i] !== 0) return true;
+  }
+  return false;
+}
+
 export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, epoch = 0, onSaveProject, onOpenProject }: EditorProps) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -116,6 +124,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
   const recorderRef = useRef<StrokeRecorder | null>(null);
   const layerCanvasesRef = useRef<Array<{ canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D }>>([]);
   const layerSigRef = useRef("");
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const projectInputRef = useRef<HTMLInputElement>(null);
   const [, setVersion] = useState(0);
   const refresh = () => setVersion((v) => v + 1);
@@ -128,10 +137,10 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
   const [showGrid, setShowGrid] = useState(true);
   const [activeLayer, setActiveLayer] = useState(0);
   const [brushSize, setBrushSize] = useState(1);
-  const [rectFilled, setRectFilled] = useState(false);
   const [sizeW, setSizeW] = useState(doc.width);
   const [sizeH, setSizeH] = useState(doc.height);
   const [exportScale, setExportScale] = useState(4);
+  const [imageImportBusy, setImageImportBusy] = useState(false);
 
   const drag = useRef({ drawing: false, tool: "pencil" as Tool, x: 0, y: 0, lastX: 0, lastY: 0 });
 
@@ -265,11 +274,9 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
     return out;
   }, [brushSize, doc.width, doc.height]);
 
-  const shapePoints = useCallback((t: Tool, x0: number, y0: number, x1: number, y1: number) => {
-    if (t === "line") return expand(drawLinePoints(x0, y0, x1, y1));
-    if (t === "rect") return expand(rectPoints(x0, y0, x1, y1, rectFilled));
-    return expand([[x1, y1]]);
-  }, [expand, rectFilled]);
+  const shapePoints = useCallback((x0: number, y0: number, x1: number, y1: number) => (
+    expand(drawLinePoints(x0, y0, x1, y1))
+  ), [expand]);
 
   // 预览：把「将要落下的确切像素」画到叠加层
   const showPreview = useCallback((pts: Array<[number, number]>, erasing: boolean) => {
@@ -378,7 +385,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
       return;
     }
 
-    // 铅笔/橡皮/直线/矩形：开始记录本次笔画（增量撤销，不整幅快照）
+    // 铅笔/橡皮/直线：开始记录本次笔画（增量撤销，不整幅快照）
     recorderRef.current = new StrokeRecorder(doc.layers[layerIndex].id);
     if (tool === "pencil" || tool === "eraser") {
       applyPoints(expand([[x, y]]), tool === "eraser" ? TRANSPARENT : currentRgba());
@@ -386,7 +393,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
       draw();
       refresh();
     } else {
-      showPreview(shapePoints(tool, x, y, x, y), false);
+      showPreview(shapePoints(x, y, x, y), false);
       refresh();
     }
   };
@@ -404,8 +411,8 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
       drag.current.lastY = y;
       syncLayerCanvas(layerIndex);
       draw();
-    } else if (t === "line" || t === "rect") {
-      showPreview(shapePoints(t, drag.current.x, drag.current.y, x, y), false);
+    } else if (t === "line") {
+      showPreview(shapePoints(drag.current.x, drag.current.y, x, y), false);
     }
   };
 
@@ -423,8 +430,8 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
     const [x, y] = toPixel(e);
     const t = drag.current.tool;
 
-    if (t === "line" || t === "rect") {
-      applyPoints(shapePoints(t, drag.current.x, drag.current.y, x, y), currentRgba());
+    if (t === "line") {
+      applyPoints(shapePoints(drag.current.x, drag.current.y, x, y), currentRgba());
       clearOverlay();
       syncLayerCanvas(layerIndex);
       draw();
@@ -434,13 +441,13 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
     refresh();
   };
 
-  // 指针取消：直线/矩形还没落笔则丢弃；铅笔/橡皮保留已画部分
+  // 指针取消：直线还没落笔则丢弃；铅笔/橡皮保留已画部分
   const onPointerCancel = () => {
     if (!drag.current.drawing) return;
     const t = drag.current.tool;
     drag.current.drawing = false;
     clearOverlay();
-    if (t === "line" || t === "rect") {
+    if (t === "line") {
       recorderRef.current = null; // 未落笔，不留历史
       refresh();
       return;
@@ -494,6 +501,45 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
     historyRef.current.pushDoc(doc);
     fn();
     refresh();
+  };
+
+  const importImage = async (file: File) => {
+    setImageImportBusy(true);
+    let bitmap: ImageBitmap | null = null;
+    try {
+      bitmap = await createImageBitmap(file);
+      if (bitmap.width > 512 || bitmap.height > 512) {
+        onNotice?.(t("notPixelArtNotice"));
+        return;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("image canvas unavailable");
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(bitmap, 0, 0);
+      const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const analysis = analyzePixelArt(image.data, image.width, image.height);
+      if (!analysis.isPixelArt) {
+        onNotice?.(t("notPixelArtNotice"));
+        return;
+      }
+      if (hasVisiblePixels(doc) && !confirm(t("replaceCurrentFrameConfirm"))) return;
+
+      const next = docFromPixels(image.data, image.width, image.height, t("importedImageLayer"));
+      withHistory(() => {
+        setDoc(next);
+        setActiveLayer(0);
+      });
+      onNotice?.(t("imageImported", { width: image.width, height: image.height }));
+    } catch (error) {
+      console.error("[PixelPaint] image import failed:", error);
+      onNotice?.(t("imageImportError"));
+    } finally {
+      bitmap?.close();
+      setImageImportBusy(false);
+    }
   };
 
   const addLayer = () => withHistory(() => {
@@ -602,6 +648,36 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
     }, "image/png");
   }, [doc, exportScale]);
 
+  const exportGif = useCallback(() => {
+    if (!animation || animation.frames.length < 2) {
+      onNotice?.(t("gifNeedsFrames"));
+      return;
+    }
+    try {
+      const gif = encodeGif(
+        animation.frames.map((frame) => ({
+          width: frame.width,
+          height: frame.height,
+          pixels: composite(frame),
+        })),
+        animation.fps,
+      );
+      const blob = new Blob([
+        gif.buffer.slice(gif.byteOffset, gif.byteOffset + gif.byteLength) as ArrayBuffer,
+      ], { type: "image/gif" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `pixelpaint-animation-${Math.max(...animation.frames.map((frame) => frame.width))}x${Math.max(...animation.frames.map((frame) => frame.height))}.gif`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      onNotice?.(t("gifExported", { count: animation.frames.length, fps: animation.fps }));
+    } catch (error) {
+      console.error("[PixelPaint] GIF export failed:", error);
+      onNotice?.(t("gifExportError"));
+    }
+  }, [animation, onNotice, t]);
+
   const saveProject = useCallback(() => {
     onSaveProject?.();
   }, [onSaveProject]);
@@ -695,12 +771,6 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
             {ZOOMS.map((z) => <option key={z} value={z}>{z}×</option>)}
           </select>
         </div>
-        {tool === "rect" && (
-          <label className="ghost-check" style={{ marginTop: 6 }}>
-            <input type="checkbox" checked={rectFilled} onChange={(e) => setRectFilled(e.target.checked)} />
-            {t("fillRectangle")}
-          </label>
-        )}
       </aside>
 
       {/* 画布 */}
@@ -937,12 +1007,40 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
 
           <div className="tool-divider" />
           <h2 className="card-title">{t("exportAndProject")}</h2>
-          <div className="size-row">
+          <div className="size-row export-actions">
             <label className="field-label" style={{ margin: 0 }} htmlFor="export-scale">{t("upscale")}</label>
             <select id="export-scale" className="num-input" style={{ flex: 1 }} value={exportScale} onChange={(e) => setExportScale(Number(e.target.value))}>
               {[1, 2, 4, 8, 16].map((s) => <option key={s} value={s}>{s}×</option>)}
             </select>
-            <button type="button" className="btn-primary" onClick={exportPng}>{t("exportPng")}</button>
+          </div>
+          <div className="size-row export-actions">
+            <button type="button" className="btn-primary" style={{ flex: 1 }} onClick={exportPng}>{t("exportPng")}</button>
+            <button
+              type="button"
+              className="btn-ghost"
+              style={{ flex: 1 }}
+              onClick={exportGif}
+              disabled={!animation || animation.frames.length < 2}
+              title={animation && animation.frames.length >= 2 ? t("exportGif") : t("gifNeedsFrames")}
+            >
+              {t("exportGif")}
+            </button>
+          </div>
+          <div className="size-row import-actions">
+            <button type="button" className="btn-ghost icon-text-btn" style={{ flex: 1 }} onClick={() => imageInputRef.current?.click()} disabled={imageImportBusy}>
+              <PixelIcon data={Upload} size={14} /> {imageImportBusy ? t("importingImage") : t("importImage")}
+            </button>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void importImage(f);
+                e.target.value = "";
+              }}
+            />
           </div>
           <div className="size-row project-actions">
             <button type="button" className="btn-ghost icon-text-btn" style={{ flex: 1 }} onClick={saveProject}>

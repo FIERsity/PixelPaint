@@ -16,7 +16,7 @@ export interface PixelDoc {
   layers: Layer[];
 }
 
-export type Tool = "pencil" | "eraser" | "picker" | "fill" | "line" | "rect";
+export type Tool = "pencil" | "eraser" | "picker" | "fill" | "line";
 
 // 笔刷覆盖的相对偏移（1 = 单像素，n = n×n）
 export function brushOffsets(size: number): Array<[number, number]> {
@@ -27,22 +27,6 @@ export function brushOffsets(size: number): Array<[number, number]> {
     for (let dx = 0; dx < n; dx++) out.push([start + dx, start + dy]);
   }
   return out;
-}
-
-// 矩形轮廓点
-export function rectPoints(
-  x0: number, y0: number, x1: number, y1: number, filled: boolean,
-): Array<[number, number]> {
-  const ax = Math.min(x0, x1), ay = Math.min(y0, y1);
-  const bx = Math.max(x0, x1), by = Math.max(y0, y1);
-  const pts: Array<[number, number]> = [];
-  if (filled) {
-    for (let y = ay; y <= by; y++) for (let x = ax; x <= bx; x++) pts.push([x, y]);
-  } else {
-    for (let x = ax; x <= bx; x++) { pts.push([x, ay]); if (by !== ay) pts.push([x, by]); }
-    for (let y = ay + 1; y <= by - 1; y++) { pts.push([ax, y]); if (bx !== ax) pts.push([bx, y]); }
-  }
-  return pts;
 }
 
 export type DocAction =
