@@ -9,16 +9,7 @@ import type { ToPixelRequest, ToPixelResponse } from "../lib/toPixel.worker";
 import { clampDimension, normalizeDimensionDraft, parseDimensionDraft } from "../lib/dimensions";
 import { pixelsToPngFile } from "../lib/imageTransfer";
 import { useI18n } from "../lib/i18n";
-
-const SIZE_PRESETS = [
-  { value: "16", labelKey: "size16" },
-  { value: "32", labelKey: "size32" },
-  { value: "64", labelKey: "size64" },
-  { value: "128", labelKey: "size128" },
-  { value: "256", labelKey: "size256" },
-] as const;
-
-type SizePreset = (typeof SIZE_PRESETS)[number]["value"] | "custom";
+import { SIZE_PRESET_VALUES, type SizePreset } from "../lib/sizePresets";
 
 interface ConvertProps {
   onImport: (doc: PixelDoc) => void | Promise<void>;
@@ -373,7 +364,7 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
                   value={sizePreset}
                   onChange={(e) => onSizePreset(e.target.value as SizePreset)}
                 >
-                  {SIZE_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{t(preset.labelKey)}</option>)}
+                  {SIZE_PRESET_VALUES.map((value) => <option key={value} value={value}>{t(`size${value}`)}</option>)}
                   <option value="custom">{t("custom")}</option>
                 </select>
                 {sizePreset === "custom" && (

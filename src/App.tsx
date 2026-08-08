@@ -275,7 +275,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [finishPrompt, promptQueue.length]);
 
-  // 转像素 / 背景处理结果 -> 画板（覆盖前确认）
+  // 像素化 / 背景处理结果 -> 画板（覆盖前确认）
   const handleImport = useCallback(async (next: PixelDoc) => {
     if (hasContent(doc) && !(await askConfirm(t("replaceCurrentFrameConfirm")))) return;
     setAnim((a) => {

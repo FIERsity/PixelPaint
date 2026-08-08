@@ -54,7 +54,7 @@ export function uid(): string {
   return `l${Date.now().toString(36)}-${seq}`;
 }
 
-// 位图 (RGBA) -> 像素文档（转像素 / 背景处理结果导入画板）
+// 位图 (RGBA) -> 像素文档（像素化 / 背景处理结果导入画板）
 export function docFromPixels(
   pixels: Uint8ClampedArray,
   width: number,

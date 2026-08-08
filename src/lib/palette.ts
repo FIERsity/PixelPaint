@@ -111,7 +111,7 @@ export const CGA: Palette = {
   ],
 };
 
-// 转像素专用的自动取色模式。编辑器的“自定义”调色板与它保持独立。
+// 像素化专用的自动取色模式。编辑器的“自定义”调色板与它保持独立。
 export const NO_PALETTE: Palette = { id: "auto", name: "自动", colors: [], source: "auto" };
 
 export const BUILTIN_PALETTES: Palette[] = [
@@ -161,6 +161,24 @@ export function normalizePaletteColors(colors: unknown[]): string[] {
     normalized.push(hex);
   }
   return normalized;
+}
+
+export function mergePaletteColors(existing: unknown[], incoming: unknown[]): {
+  colors: string[];
+  added: string[];
+  skipped: number;
+} {
+  const colors = normalizePaletteColors(existing);
+  const seen = new Set(colors);
+  const normalizedIncoming = normalizePaletteColors(incoming);
+  const added: string[] = [];
+  for (const color of normalizedIncoming) {
+    if (seen.has(color)) continue;
+    seen.add(color);
+    colors.push(color);
+    added.push(color);
+  }
+  return { colors, added, skipped: normalizedIncoming.length - added.length };
 }
 
 export function createCustomPalette(name = "自定义", colors: unknown[] = []): Palette {

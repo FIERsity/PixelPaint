@@ -5,6 +5,7 @@ import {
   paletteToJson,
   parsePaletteText,
   createCustomPalette,
+  mergePaletteColors,
 } from "./palette";
 
 describe("palette formats", () => {
@@ -31,5 +32,13 @@ describe("palette formats", () => {
     expect(paletteToJson(palette)).toContain('"format": "pixelpaint-palette"');
     expect(paletteToGpl(palette)).toContain("GIMP Palette");
     expect(paletteToGpl(palette)).toContain("255   0   0 #ff0000");
+  });
+
+  it("merges palette colors in source order and reports duplicates", () => {
+    expect(mergePaletteColors(["#ff0000"], ["#00ff00", "#f00", "#0000ff"])).toEqual({
+      colors: ["#ff0000", "#00ff00", "#0000ff"],
+      added: ["#00ff00", "#0000ff"],
+      skipped: 1,
+    });
   });
 });

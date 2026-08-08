@@ -1,4 +1,4 @@
-// PixelPaint · 转像素 Web Worker
+// PixelPaint · 像素化 Web Worker
 import { imageToPixels, type ToPixelOptions } from "./pixel";
 
 export interface ToPixelRequest {
