@@ -930,7 +930,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
             <input id="canvas-h" className="num-input" type="number" min={1} max={512} value={sizeH}
               onChange={(e) => setSizeH(clampSize(Number(e.target.value)))} />
           </div>
-          <div className="size-row">
+          <div className="size-row canvas-resize-actions">
             <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={applyResize}>{t("resizeKeepContent")}</button>
             <button type="button" className="btn-ghost" style={{ flex: 1 }} onClick={newCanvas}>{t("newBlankCanvas")}</button>
           </div>
@@ -944,7 +944,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
             </select>
             <button type="button" className="btn-primary" onClick={exportPng}>{t("exportPng")}</button>
           </div>
-          <div className="size-row">
+          <div className="size-row project-actions">
             <button type="button" className="btn-ghost icon-text-btn" style={{ flex: 1 }} onClick={saveProject}>
               <PixelIcon data={Download} size={14} /> {t("saveProject")}
             </button>
@@ -963,7 +963,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
               }}
             />
           </div>
-          <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+          <p className="project-hint" style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
             {t("projectHint")}
           </p>
         </div>

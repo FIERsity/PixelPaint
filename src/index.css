@@ -108,6 +108,24 @@ input[type="checkbox"]:focus-visible, input[type="range"]:focus-visible {
 .lang-btn.active { color: #fff; background: var(--primary); }
 .header-feedback { white-space: nowrap; }
 
+/* 英文词组更长，单独收紧密集区域，避免只剩一个词被挤到下一行。 */
+html[lang="en"] .tagline { font-size: 12px; }
+html[lang="en"] .card-desc,
+html[lang="en"] .workbench-desc,
+html[lang="en"] .field-label,
+html[lang="en"] .param-row label,
+html[lang="en"] .operation-empty,
+html[lang="en"] .result-empty { font-size: 12px; }
+html[lang="en"] .shortcut-hint { font-size: 10px; line-height: 1.6; letter-spacing: -0.01em; }
+html[lang="en"] .tool-panel-field .field-label { font-size: 10.5px; letter-spacing: -0.03em; }
+html[lang="en"] .canvas-resize-actions > .btn-ghost,
+html[lang="en"] .project-actions > .btn-ghost {
+  font-size: 12px;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
+
 /* ---------- Tab 导航 ---------- */
 .tabs { display: flex; gap: 4px; }
 .tab {
@@ -497,3 +515,22 @@ main { flex: 1; padding-bottom: 20px; }
 }
 .modal textarea:focus { border-color: var(--primary); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+/* 响应式覆盖放在组件样式之后，确保窄屏规则不会被基础样式重新覆盖。 */
+@media (max-width: 920px) {
+  .tool-panel {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    position: sticky;
+    top: 64px;
+    z-index: 20;
+  }
+  .tool-list { flex-direction: row; flex-wrap: wrap; }
+  .tool-btn { min-width: 48px; }
+  .tool-divider { display: none; }
+  .tool-panel-field { flex: 1; min-width: 104px; margin-top: 0; }
+  .canvas-stage { max-height: 56dvh; padding: 12px; }
+  .side-panels { gap: 12px; }
+}
