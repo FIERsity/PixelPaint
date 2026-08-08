@@ -18,7 +18,6 @@ import {
 } from "../lib/palette";
 import { Pencil } from "./icons/pencil";
 import { Eraser } from "./icons/eraser";
-import { Eyedropper } from "./icons/eyedropper";
 import { PaintBucket } from "./icons/paint-bucket";
 import { Undo } from "./icons/undo";
 import { Redo } from "./icons/redo";
@@ -91,7 +90,6 @@ const ZOOMS = [1, 2, 4, 8, 16, 32];
 const TOOLS: Array<{ id: Tool; labelKey: string; icon: PxlKitData; key: string }> = [
   { id: "pencil", labelKey: "pencil", icon: Pencil, key: "B" },
   { id: "eraser", labelKey: "eraser", icon: Eraser, key: "E" },
-  { id: "picker", labelKey: "picker", icon: Eyedropper, key: "I" },
   { id: "fill", labelKey: "fill", icon: PaintBucket, key: "G" },
   { id: "line", labelKey: "line", icon: Line, key: "L" },
   { id: "select", labelKey: "selectionTool", icon: Selection, key: "M" },
@@ -232,6 +230,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const refresh = () => setVersion((v) => v + 1);
 
   const [tool, setTool] = useState<Tool>("pencil");
+  const [canvasColorPickArmed, setCanvasColorPickArmed] = useState(false);
   const [color, setColor] = useState<string>(palette.colors[3] ?? "#ef7d57");
   const [colorText, setColorText] = useState<string>(palette.colors[3] ?? "#ef7d57");
   const [paletteName, setPaletteName] = useState(palette.name);
@@ -283,6 +282,18 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   } | null>(null);
 
   const askConfirm = useCallback((message: string) => onConfirm(message), [onConfirm]);
+
+  const armCanvasColorPick = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (!window.matchMedia("(min-width: 561px) and (pointer: fine)").matches) return;
+    setCanvasColorPickArmed(true);
+  }, []);
+
+  const updateChosenColor = useCallback((value: string) => {
+    setColor(value);
+    setColorText(value);
+    setCanvasColorPickArmed(false);
+  }, []);
 
   const paletteEditable = palette.source === "custom";
   const paletteDisplayName = palette.id === "custom-default" && palette.name === "自定义" ? t("paletteCustom") : palette.name;
@@ -1165,22 +1176,20 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     if (navigationRef.current) return;
     const [x, y] = toPixel(e);
 
-    if (moveSessionRef.current && tool !== "move") {
-      onNotice?.(t("moveFinishFirst"));
-      return;
-    }
-
-    // 取色：透明处不改色
-    if (tool === "picker") {
+    // 桌面端颜色选择器开启后，画布临时充当吸管；取色完成后恢复原工具。
+    if (canvasColorPickArmed && e.pointerType !== "touch") {
       const img = composite(doc);
       const [r, g, b, a] = getPixel(img, doc.width, x, y);
       if (a === 0) {
         onNotice?.(t("transparentPixel"));
       } else {
-        const hex = rgbToHex(r, g, b);
-        setColor(hex);
-        setColorText(hex);
+        updateChosenColor(rgbToHex(r, g, b));
       }
+      return;
+    }
+
+    if (moveSessionRef.current && tool !== "move") {
+      onNotice?.(t("moveFinishFirst"));
       return;
     }
 
@@ -1608,6 +1617,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       onNotice?.(t("moveFinishFirst"));
       return;
     }
+    setCanvasColorPickArmed(false);
     setTool(next);
   }, [onNotice, t]);
 
@@ -1615,6 +1625,11 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
+      if (e.key === "Escape" && canvasColorPickArmed) {
+        e.preventDefault();
+        setCanvasColorPickArmed(false);
+        return;
+      }
       if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
       const mod = e.ctrlKey || e.metaKey;
 
@@ -1818,7 +1833,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
           >
             <canvas
               ref={canvasRef}
-              className={`pixelated canvas-input canvas-tool-${tool}`}
+              className={`pixelated canvas-input canvas-tool-${tool} ${canvasColorPickArmed ? "canvas-color-pick-active" : ""}`}
               style={{ width: doc.width * cell, height: doc.height * cell, touchAction: "none" }}
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}
@@ -2037,7 +2052,8 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
               type="color"
               className="palette-color-picker"
               value={color}
-              onChange={(e) => { setColor(e.target.value); setColorText(e.target.value); }}
+              onClick={armCanvasColorPick}
+              onChange={(e) => updateChosenColor(e.target.value)}
               aria-label={t("chooseColor")}
             />
             <input
@@ -2266,7 +2282,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
                 ))}
               </div>
               <div className="color-row palette-color-add-row">
-                <input type="color" className="palette-color-picker" value={color} onChange={(e) => { setColor(e.target.value); setColorText(e.target.value); }} aria-label={t("chooseColor")} />
+                <input type="color" className="palette-color-picker" value={color} onChange={(e) => updateChosenColor(e.target.value)} aria-label={t("chooseColor")} />
                 <input className="text-input palette-hex-input" value={colorText} onChange={(e) => { setColorText(e.target.value); const rgb = parseHex(e.target.value); if (rgb) setColor(rgbToHex(rgb[0], rgb[1], rgb[2])); }} onBlur={() => setColorText(color)} aria-label={t("colorHex")} />
                 <button type="button" className="btn-primary palette-add-color-btn" onClick={addCurrentColor} disabled={!canAddCurrentColor}>{currentColorExists ? t("paletteColorExists") : t("paletteAddColor")}</button>
               </div>

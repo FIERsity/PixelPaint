@@ -16,7 +16,7 @@ export interface PixelDoc {
   layers: Layer[];
 }
 
-export type Tool = "pencil" | "eraser" | "picker" | "fill" | "line" | "select" | "move";
+export type Tool = "pencil" | "eraser" | "fill" | "line" | "select" | "move";
 
 // 笔刷覆盖的相对偏移（1 = 单像素，n = n×n）
 export function brushOffsets(size: number): Array<[number, number]> {

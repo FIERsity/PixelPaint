@@ -318,6 +318,10 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
 .canvas-input.canvas-tool-select { cursor: crosshair; }
 .canvas-input.canvas-tool-move { cursor: grab; }
 .canvas-input.canvas-tool-move:active { cursor: grabbing; }
+.canvas-input.canvas-color-pick-active,
+.canvas-input.canvas-color-pick-active:active {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M17.5 2.5 21.5 6.5 17 11l-1.5-1.5-8 8-4 1 1-4 8-8L11 5l4.5 4.5L20 5l-2.5-2.5Z' fill='%23fff' stroke='%23191919' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E") 4 20, crosshair;
+}
 .canvas-stage {
   display: flex; justify-content: center; align-items: flex-start;
   padding: 20px; border-radius: 10px; min-height: 320px; max-height: 68dvh; overflow: auto;
