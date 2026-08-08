@@ -1,2 +1,70 @@
-# PixelPaint
-在线像素画工作站：像素画编辑器 · 图片转像素化 · 自动抠图。
+# PixelPaint · 在线像素画工作站
+
+在线像素画工作站：**画像素画 · 图片转像素化 · AI 自动抠图**。图片全程在浏览器本地处理，不会上传到服务器。
+
+在线使用：https://FIERsity.github.io/PixelPaint/
+
+## 功能
+
+### 🎨 画板
+- 铅笔 / 橡皮 / 取色 / 填充 / 直线 / 矩形
+- 水平 / 垂直 / 双向对称绘制
+- 可调笔刷大小、画布缩放（1×~32×）、网格开关
+- 多图层（新建 / 删除 / 排序 / 显隐 / 不透明度）
+- 撤销 / 重做
+- 预设调色板（Sweetie 16 / PICO-8 / Game Boy / 灰度）+ 任意取色
+- 导出 PNG（1×~16× 最近邻放大）
+
+### 🖼 转像素
+- 上传任意图片 → 降采样 + median-cut 颜色量化 → 像素画
+- 可调输出尺寸、颜色数、调色板、抖动算法（Floyd-Steinberg / Atkinson / Bayer）
+- 大图处理在 Web Worker 中进行，不卡界面
+- 一键「发送到画板」继续精修
+
+### ✂️ 抠图
+- AI 自动去除背景（RMBG-1.4，ONNX Runtime 本地推理）
+- 快速（量化 ~40MB）/ 精细（ISNet）两档模型
+- 首次使用下载模型，之后浏览器缓存秒开
+- 结果可下载 PNG 或发送到画板继续转像素 / 精修
+
+## 技术栈
+
+Vite + React + TypeScript + Tailwind CSS v4 + @imgly/background-removal
+
+## 本地开发
+
+```bash
+npm install
+npm run dev       # 本地开发
+npm run build     # 构建到 dist/
+npm run preview   # 预览构建产物
+```
+
+## 部署
+
+推送到 `main` 分支自动部署到 GitHub Pages（见 `.github/workflows/pages.yml`），
+或手动：Settings → Pages → Source 选 GitHub Actions。
+
+## 目录结构
+
+```
+PixelPaint/
+├── src/
+│   ├── components/
+│   │   ├── Editor.tsx     # 画板编辑器
+│   │   ├── Convert.tsx    # 图片转像素化
+│   │   └── Cutout.tsx     # 自动抠图
+│   ├── lib/
+│   │   ├── pixelDoc.ts    # 像素文档模型 + 画笔工具 + 撤销
+│   │   ├── pixel.ts       # 降采样 / 量化 / 抖动算法
+│   │   ├── palette.ts     # 调色板
+│   │   └── toPixel.worker.ts  # 转像素 Web Worker
+│   ├── App.tsx            # 布局 + 三模块导航
+│   └── index.css          # TinyPress 风格设计系统
+├── .github/workflows/pages.yml
+└── README.md
+```
+
+## 许可证
+
+MIT
