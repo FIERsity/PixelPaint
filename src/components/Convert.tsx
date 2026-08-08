@@ -1,13 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PixelDoc } from "../lib/pixelDoc";
 import { docFromPixels } from "../lib/pixelDoc";
-import { NO_PALETTE, PRESET_PALETTES, type Palette } from "../lib/palette";
+import { NO_PALETTE, PRESET_PALETTES, rgbToHex, type Palette } from "../lib/palette";
 import type { DitherMode, ToPixelOptions } from "../lib/pixel";
 import type { ToPixelRequest, ToPixelResponse } from "../lib/toPixel.worker";
+import { checkerStyle } from "../lib/checker";
+import { pixelsToPngFile, type ImageTransfer } from "../lib/imageTransfer";
+
+const SIZE_PRESETS = [
+  { value: "16", label: "16 px（按比例）" },
+  { value: "32", label: "32 px（按比例）" },
+  { value: "64", label: "64 px（按比例）" },
+  { value: "128", label: "128 px（按比例）" },
+  { value: "256", label: "256 px（按比例）" },
+] as const;
+
+type SizePreset = (typeof SIZE_PRESETS)[number]["value"] | "custom";
 
 interface ConvertProps {
   onImport: (doc: PixelDoc) => void;
   onNotice?: (msg: string) => void;
+  onSendToCutout: (file: File) => void;
+  incomingImage?: ImageTransfer | null;
+  onIncomingConsumed?: (id: number) => void;
 }
 
 interface Source {
@@ -23,15 +38,18 @@ interface Result {
   h: number;
 }
 
-export default function Convert({ onImport, onNotice }: ConvertProps) {
+export default function Convert({ onImport, onNotice, onSendToCutout, incomingImage, onIncomingConsumed }: ConvertProps) {
   const [source, setSource] = useState<Source | null>(null);
   const [outW, setOutW] = useState(32);
   const [outH, setOutH] = useState(32);
+  const [sizePreset, setSizePreset] = useState<SizePreset>("32");
   const [lockRatio, setLockRatio] = useState(true);
   const [maxColors, setMaxColors] = useState(16);
   const [paletteName, setPaletteName] = useState<string>(NO_PALETTE.name);
+  const [autoPalette, setAutoPalette] = useState<string[]>([]);
   const [dither, setDither] = useState<DitherMode>("none");
   const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragover, setDragover] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
@@ -41,7 +59,7 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
   const workerRef = useRef<Worker | null>(null);
   const reqId = useRef(0);
   // 每个请求自带尺寸，避免用“最新参数”错配旧结果导致崩溃/花屏
-  const pending = useRef(new Map<number, { w: number; h: number }>());
+  const pending = useRef(new Map<number, { w: number; h: number; auto: boolean }>());
   const sourceRef = useRef<Source | null>(null);
   sourceRef.current = source;
   const optsRef = useRef<ToPixelOptions | null>(null);
@@ -76,6 +94,9 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
         return;
       }
       if (!req) return;
+      if (req.auto && Array.isArray(msg.palette)) {
+        setAutoPalette(msg.palette.map(([r, g, b]) => rgbToHex(r, g, b)));
+      }
       setResult({ pixels: msg.pixels, w: req.w, h: req.h });
       setBusy(false);
     };
@@ -97,13 +118,17 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
     if (!opts) return;
     reqId.current += 1;
     const id = reqId.current;
-    pending.current.set(id, { w: opts.outWidth, h: opts.outHeight });
+    pending.current.set(id, {
+      w: opts.outWidth,
+      h: opts.outHeight,
+      auto: paletteName === NO_PALETTE.name,
+    });
     setBusy(true);
     setError(null);
     // 传拷贝而非 transfer，避免 detach 源图
     const req: ToPixelRequest = { id, data: s.data, srcW: s.w, srcH: s.h, opts };
     w.postMessage(req);
-  }, [ensureWorker]);
+  }, [ensureWorker, paletteName]);
 
   // 参数或图片变化时自动转换（限流）
   useEffect(() => {
@@ -142,6 +167,8 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
       const h = Math.max(1, Math.round((32 * img.height) / img.width));
       setOutW(w);
       setOutH(h);
+      setSizePreset("32");
+      setAutoPalette([]);
       onNotice?.(`已读取 ${file.name}（${img.width}×${img.height}）`);
     } catch {
       setError("无法读取该图片，请换一张试试。");
@@ -150,10 +177,28 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
 
   const onWidth = (v: number) => {
     const w = Math.max(1, Math.min(512, Math.round(v) || 1));
+    setSizePreset("custom");
     setOutW(w);
     if (lockRatio && source) {
       setOutH(Math.max(1, Math.min(512, Math.round((w * source.h) / source.w))));
     }
+  };
+
+  const onHeight = (v: number) => {
+    setSizePreset("custom");
+    setOutH(Math.max(1, Math.min(512, Math.round(v) || 1)));
+  };
+
+  const onSizePreset = (value: SizePreset) => {
+    setSizePreset(value);
+    if (value === "custom") return;
+    const width = Number(value);
+    const height = source
+      ? Math.max(1, Math.min(512, Math.round((width * source.h) / source.w)))
+      : width;
+    setOutW(width);
+    setOutH(height);
+    setLockRatio(true);
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -163,12 +208,35 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
     if (f) loadFile(f);
   };
 
+  // 从抠图模块流转过来的图片，作为新的输入载入。
+  useEffect(() => {
+    if (!incomingImage) return;
+    void loadFile(incomingImage.file);
+    onIncomingConsumed?.(incomingImage.id);
+  }, [incomingImage, loadFile, onIncomingConsumed]);
+
   const chosenPalette: Palette = PRESET_PALETTES.find((p) => p.name === paletteName) ?? NO_PALETTE;
   const paletteLocked = chosenPalette.colors.length > 0;
   // 预览放大：小画布放大到可读尺寸（最长边约 420px），不超过 20×
   const previewScale = result
     ? Math.max(1, Math.min(20, Math.floor(420 / Math.max(result.w, result.h))))
     : 1;
+  const previewChecker = checkerStyle(previewScale);
+
+  const sendToCutout = async () => {
+    if (!result || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      const file = await pixelsToPngFile(result.pixels, result.w, result.h, "pixelpaint-converted.png");
+      if (!file) throw new Error("无法生成 PNG");
+      onSendToCutout(file);
+    } catch {
+      setError("无法把结果送入抠图，请重试。");
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
     <div className="convert-layout">
@@ -217,20 +285,24 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
             {result && <span className="badge">{result.w} × {result.h} px</span>}
           </div>
           {result ? (
-            <div className="preview-box checker">
-              <canvas
-                ref={previewRef}
-                className="pixelated"
-                style={{
-                  imageRendering: "pixelated",
-                  width: result.w * previewScale,
-                  height: "auto",
-                  aspectRatio: `${result.w} / ${result.h}`,
-                }}
-              />
+            <div className="preview-box">
+              <div
+                className="pixel-preview checker"
+                style={{ width: result.w * previewScale, height: result.h * previewScale, ...previewChecker }}
+              >
+                <canvas
+                  ref={previewRef}
+                  className="pixelated"
+                  style={{
+                    imageRendering: "pixelated",
+                    width: result.w * previewScale,
+                    height: result.h * previewScale,
+                  }}
+                />
+              </div>
             </div>
           ) : (
-            <div className="preview-box" style={{ color: "var(--muted)", fontSize: 13 }}>上传图片后在此预览像素化结果</div>
+            <div className="preview-box checker" style={{ color: "var(--muted)", fontSize: 13 }}>上传图片后在此预览像素化结果</div>
           )}
           {busy && <div className="progress"><div style={{ width: "100%" }} /></div>}
           {error && <p style={{ color: "var(--red)", fontSize: 13, marginTop: 8 }}>{error}</p>}
@@ -244,15 +316,26 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
           <div className="tool-divider" />
 
           <div className="param-row">
-            <label htmlFor="out-w">输出尺寸 <span className="range-val">{outW}×{outH}</span></label>
-            <div className="size-row">
-              <input id="out-w" className="num-input" type="number" min={1} max={512} value={outW} onChange={(e) => onWidth(Number(e.target.value))} aria-label="输出宽度" />
-              <span style={{ color: "var(--muted)" }} aria-hidden="true">×</span>
-              <input className="num-input" type="number" min={1} max={512} value={outH} onChange={(e) => setOutH(Math.max(1, Math.min(512, Number(e.target.value) || 1)))} aria-label="输出高度" />
-            </div>
+            <label htmlFor="size-preset">输出尺寸 <span className="range-val">{outW}×{outH}</span></label>
+            <select
+              id="size-preset"
+              className="num-input"
+              value={sizePreset}
+              onChange={(e) => onSizePreset(e.target.value as SizePreset)}
+            >
+              {SIZE_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+              <option value="custom">自定义</option>
+            </select>
+            {sizePreset === "custom" && (
+              <div className="size-row">
+                <input id="out-w" className="num-input" type="number" min={1} max={512} value={outW} onChange={(e) => onWidth(Number(e.target.value))} aria-label="输出宽度" />
+                <span style={{ color: "var(--muted)" }} aria-hidden="true">×</span>
+                <input className="num-input" type="number" min={1} max={512} value={outH} onChange={(e) => onHeight(Number(e.target.value))} aria-label="输出高度" />
+              </div>
+            )}
             <label className="ghost-check" style={{ marginTop: 6 }}>
               <input type="checkbox" checked={lockRatio} onChange={(e) => setLockRatio(e.target.checked)} />
-              保持原图比例
+              自定义时保持原图比例
             </label>
           </div>
 
@@ -292,6 +375,20 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
                 ))}
               </div>
             )}
+            {paletteName === NO_PALETTE.name && (
+              <>
+                <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
+                  {autoPalette.length > 0 ? `已从当前图片提取 ${autoPalette.length} 色` : "上传图片后自动提取颜色"}
+                </p>
+                {autoPalette.length > 0 && (
+                  <div className="palette-grid auto-palette-grid">
+                    {autoPalette.map((c) => (
+                      <span key={c} className="swatch" style={{ background: c }} title={c} />
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <div className="param-row">
@@ -321,6 +418,15 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
             }}
           >
             {busy ? "转换中…" : "发送到画板精修"}
+          </button>
+          <button
+            type="button"
+            className="btn-ghost"
+            style={{ width: "100%", marginTop: 8 }}
+            disabled={!result || busy || sending}
+            onClick={sendToCutout}
+          >
+            {sending ? "准备中…" : "发送到抠图"}
           </button>
           <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
             结果会作为新画布进入「画板」继续编辑

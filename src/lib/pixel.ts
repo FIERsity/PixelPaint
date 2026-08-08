@@ -64,113 +64,141 @@ export function quantize(
     return { pixels: out, palette: [] };
   }
 
-  // 收集颜色（忽略全透明）
+  // 收集颜色（忽略全透明）。自动调色板来自这张图，而不是一组固定的通用颜色。
   const map = new Map<number, number>(); // rgb packed -> count
   for (let i = 0; i < out.length; i += 4) {
     if (out[i + 3] === 0) continue;
     const key = (out[i] << 16) | (out[i + 1] << 8) | out[i + 2];
     map.set(key, (map.get(key) ?? 0) + 1);
   }
-  const colors: Array<{ r: number; g: number; b: number; count: number }> = [];
+  const colors: WeightedColor[] = [];
   for (const [key, count] of map) {
     colors.push({ r: (key >> 16) & 255, g: (key >> 8) & 255, b: key & 255, count });
   }
-  if (colors.length <= maxColors) return { pixels: out, palette: colors.map((c) => [c.r, c.g, c.b]) };
+  if (colors.length <= maxColors) return { pixels: out, palette: colors.map(toRgb) };
 
-  // 中值切分：优先劈开颜色跨度最大的盒子（保留不同色相），像素数做平局裁决
-  let boxes: Array<typeof colors> = [colors];
-  while (boxes.length < maxColors) {
-    let bestIdx = -1;
-    let bestRange = -1;
-    let bestWeight = -1;
-    for (let i = 0; i < boxes.length; i++) {
-      const box = boxes[i];
-      if (box.length < 2) continue;
-      const range = boxRange(box);
-      const weight = box.reduce((s, c) => s + c.count, 0);
-      if (range > bestRange || (range === bestRange && weight > bestWeight)) {
-        bestRange = range;
-        bestWeight = weight;
-        bestIdx = i;
-      }
-    }
-    if (bestIdx < 0) break; // 没有可再劈的盒子
-    const split = splitBox(boxes[bestIdx]);
-    if (!split) break;
-    boxes.splice(bestIdx, 1, ...split);
-  }
+  // 先把照片中的细碎噪声压缩成最多 32³ 个颜色桶，避免大图让 Worker 计算过重。
+  const candidates = colors.length > 32768 ? bucketColors(colors) : colors;
+  const palette = clusterPalette(candidates, maxColors);
 
-  // 每个盒子取加权平均色，重映射
+  // 对原始颜色建立查找表，避免每个像素重复做最近色搜索。
   const lut = new Map<number, [number, number, number]>();
-  for (const box of boxes) {
-    let r = 0, g = 0, b = 0, w = 0;
-    for (const c of box) { r += c.r * c.count; g += c.g * c.count; b += c.b * c.count; w += c.count; }
-    const avg: [number, number, number] = [Math.round(r / w), Math.round(g / w), Math.round(b / w)];
-    for (const c of box) lut.set((c.r << 16) | (c.g << 8) | c.b, avg);
+  for (const c of colors) {
+    lut.set((c.r << 16) | (c.g << 8) | c.b, nearestColor(c, palette));
   }
-
-  const palette: Array<[number, number, number]> = [];
-  const palSeen = new Set<string>();
-  for (const avg of lut.values()) {
-    const k = avg.join(",");
-    if (!palSeen.has(k)) { palSeen.add(k); palette.push(avg); }
-  }
-
   for (let i = 0; i < out.length; i += 4) {
     if (out[i + 3] === 0) continue;
-    const key = (out[i] << 16) | (out[i + 1] << 8) | out[i + 2];
-    const avg = lut.get(key);
+    const avg = lut.get((out[i] << 16) | (out[i + 1] << 8) | out[i + 2]);
     if (avg) { out[i] = avg[0]; out[i + 1] = avg[1]; out[i + 2] = avg[2]; }
   }
   return { pixels: out, palette };
 }
 
-function boxRange(box: Array<{ r: number; g: number; b: number; count: number }>): number {
-  let minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
-  for (const c of box) {
-    if (c.r < minR) minR = c.r; if (c.r > maxR) maxR = c.r;
-    if (c.g < minG) minG = c.g; if (c.g > maxG) maxG = c.g;
-    if (c.b < minB) minB = c.b; if (c.b > maxB) maxB = c.b;
-  }
-  return (maxR - minR) + (maxG - minG) + (maxB - minB);
+type WeightedColor = { r: number; g: number; b: number; count: number };
+type RgbColor = [number, number, number];
+
+function toRgb(c: WeightedColor): RgbColor {
+  return [c.r, c.g, c.b];
 }
 
-function splitBox(box: Array<{ r: number; g: number; b: number; count: number }>): [typeof box, typeof box] | null {
-  if (box.length < 2) return null;
-  let minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
-  for (const c of box) {
-    minR = Math.min(minR, c.r); maxR = Math.max(maxR, c.r);
-    minG = Math.min(minG, c.g); maxG = Math.max(maxG, c.g);
-    minB = Math.min(minB, c.b); maxB = Math.max(maxB, c.b);
+function bucketColors(colors: WeightedColor[]): WeightedColor[] {
+  const buckets = new Map<number, { r: number; g: number; b: number; count: number }>();
+  for (const c of colors) {
+    const br = c.r >> 3, bg = c.g >> 3, bb = c.b >> 3;
+    const key = (br << 10) | (bg << 5) | bb;
+    const bucket = buckets.get(key) ?? { r: 0, g: 0, b: 0, count: 0 };
+    bucket.r += c.r * c.count;
+    bucket.g += c.g * c.count;
+    bucket.b += c.b * c.count;
+    bucket.count += c.count;
+    buckets.set(key, bucket);
   }
-  const rangeR = maxR - minR, rangeG = maxG - minG, rangeB = maxB - minB;
-  const channel = rangeR >= rangeG && rangeR >= rangeB ? "r" : rangeG >= rangeB ? "g" : "b";
-  const sorted = [...box].sort((a, b) => a[channel] - b[channel]);
+  return [...buckets.values()].map((b) => ({
+    r: Math.round(b.r / b.count),
+    g: Math.round(b.g / b.count),
+    b: Math.round(b.b / b.count),
+    count: b.count,
+  }));
+}
 
-  // 感知色隙：在主导通道找“显著断层”（明显大于簇内典型间隔），
-  // 在断层处劈开，把不同色相簇分开而不是混在一起取平均
-  const gaps: number[] = [];
-  for (let i = 0; i < sorted.length - 1; i++) gaps.push(sorted[i + 1][channel] - sorted[i][channel]);
-  const sortedGaps = [...gaps].sort((a, b) => a - b);
-  const medianGap = sortedGaps[Math.floor(sortedGaps.length / 2)] || 0;
-  const maxGap = sortedGaps[sortedGaps.length - 1];
-  let splitAt = -1;
-  if (maxGap >= 12 && maxGap >= medianGap * 3 + 1) {
-    splitAt = gaps.indexOf(maxGap) + 1;
-  }
+function colorDistance(a: RgbColor, b: RgbColor): number {
+  return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2;
+}
 
-  // 无显著断层（平滑渐变）或断层在边缘：退回按像素数对半劈
-  if (splitAt <= 0 || splitAt >= sorted.length) {
-    const total = sorted.reduce((s, c) => s + c.count, 0);
-    let acc = 0, mid = 0;
-    for (let i = 0; i < sorted.length; i++) {
-      acc += sorted[i].count;
-      if (acc * 2 >= total) { mid = i + 1; break; }
+function nearestColor(c: WeightedColor | RgbColor, palette: RgbColor[]): RgbColor {
+  const rgb: RgbColor = Array.isArray(c) ? c : [c.r, c.g, c.b];
+  return palette[nearestColorIndex(rgb, palette)];
+}
+
+function nearestColorIndex(rgb: RgbColor, palette: RgbColor[]): number {
+  let best = 0;
+  let bestDistance = Infinity;
+  for (let i = 0; i < palette.length; i++) {
+    const p = palette[i];
+    const distance = colorDistance(rgb, p);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = i;
     }
-    splitAt = mid;
   }
-  if (splitAt <= 0 || splitAt >= sorted.length) return null;
-  return [sorted.slice(0, splitAt), sorted.slice(splitAt)];
+  return best;
+}
+
+// 带权重的 k-means++：第一颜色偏向主色，后续颜色优先保留相距很远的点，
+// 因此少量但明显不同的主体颜色不会被主色调吞掉。
+function clusterPalette(colors: WeightedColor[], maxColors: number): RgbColor[] {
+  const first = colors.reduce((best, c) => c.count > best.count ? c : best, colors[0]);
+  const centers: RgbColor[] = [toRgb(first)];
+  while (centers.length < maxColors) {
+    let candidate: WeightedColor | null = null;
+    let bestScore = -1;
+    for (const c of colors) {
+      const distance = colorDistance([c.r, c.g, c.b], nearestColor(c, centers));
+      const score = distance * Math.sqrt(c.count);
+      if (score > bestScore) {
+        bestScore = score;
+        candidate = c;
+      }
+    }
+    if (!candidate || bestScore <= 0) break;
+    centers.push(toRgb(candidate));
+  }
+
+  for (let iteration = 0; iteration < 8; iteration++) {
+    const sums = centers.map(() => ({ r: 0, g: 0, b: 0, count: 0 }));
+    for (const c of colors) {
+      const rgb: RgbColor = [c.r, c.g, c.b];
+      const sum = sums[nearestColorIndex(rgb, centers)];
+      sum.r += c.r * c.count;
+      sum.g += c.g * c.count;
+      sum.b += c.b * c.count;
+      sum.count += c.count;
+    }
+    let changed = false;
+    for (let i = 0; i < centers.length; i++) {
+      if (sums[i].count === 0) continue;
+      const next: RgbColor = [
+        Math.round(sums[i].r / sums[i].count),
+        Math.round(sums[i].g / sums[i].count),
+        Math.round(sums[i].b / sums[i].count),
+      ];
+      if (colorDistance(next, centers[i]) > 0) changed = true;
+      centers[i] = next;
+    }
+    if (!changed) break;
+  }
+
+  const seen = new Set<string>();
+  const distinct: RgbColor[] = [];
+  return centers.filter((c) => {
+    const key = c.join(",");
+    if (seen.has(key)) return false;
+    // 自动预设不堆叠几乎看不出差别的颜色；把名额留给更明显的色相/明度。
+    if (distinct.some((p) => colorDistance(c, p) < 18 ** 2)) return false;
+    seen.add(key);
+    distinct.push(c);
+    return true;
+  });
 }
 
 // ---------- 抖动 ----------
@@ -285,9 +313,9 @@ export function imageToPixels(
       }
     }
   } else if (opts.maxColors > 0) {
-    // median-cut
-    const { pixels: q, palette } = quantize(px, opts.maxColors);
-    px = q;
+    // 自动提取图片自身的颜色簇
+    const sourcePx = px;
+    const { pixels: q, palette } = quantize(sourcePx, opts.maxColors);
     paletteColors = palette;
     if (opts.dither !== "none") {
       const mapColor = (r: number, g: number, b: number) => {
@@ -299,7 +327,10 @@ export function imageToPixels(
         }
         return best;
       };
-      px = dither(px, opts.outWidth, opts.outHeight, opts.dither, mapColor);
+      // 抖动要从降采样后的原色开始，而不是从已经量化过的 q 开始，否则误差已经被吃掉。
+      px = dither(sourcePx, opts.outWidth, opts.outHeight, opts.dither, mapColor);
+    } else {
+      px = q;
     }
   }
   // maxColors<=0 且无调色板：直接输出（只降采样）

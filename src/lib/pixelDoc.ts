@@ -46,7 +46,7 @@ export function rectPoints(
 }
 
 export type DocAction =
-  | { type: "paint" } // 画笔类（含对称）
+  | { type: "paint" } // 画笔类
   | { type: "fill" }
   | { type: "set-canvas" }
   | { type: "layer-add" }

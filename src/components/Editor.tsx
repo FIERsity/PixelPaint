@@ -19,6 +19,7 @@ import { Line } from "./icons/line";
 import { Rect } from "./icons/rect";
 import PixelIcon from "../lib/PixelIcon";
 import type { PxlKitData } from "../lib/pixelTypes";
+import { checkerStyle } from "../lib/checker";
 
 export interface AnimationProps {
   frames: PixelDoc[];
@@ -647,6 +648,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
 
   const gridVisible = showGrid && zoom >= 4;
   const cell = zoom;
+  const canvasChecker = checkerStyle(cell);
   const canUndo = historyRef.current.canUndo;
   const canRedo = historyRef.current.canRedo;
 
@@ -714,7 +716,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
         <div className="canvas-stage">
           <div
             className="canvas-wrap checker"
-            style={{ width: doc.width * cell, height: doc.height * cell, backgroundSize: `${cell}px ${cell}px` }}
+            style={{ width: doc.width * cell, height: doc.height * cell, ...canvasChecker }}
           >
             <canvas
               ref={canvasRef}
@@ -741,7 +743,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
           </div>
         </div>
         <p className="shortcut-hint">
-          快捷键：B 铅笔 · E 橡皮 · I 取色 · G 填充 · L 直线 · R 矩形 · M 对称 · [ ] 笔刷 · - + 缩放 · Ctrl+Z 撤销 · Ctrl+S 存工程
+          快捷键：B 铅笔 · E 橡皮 · I 取色 · G 填充 · L 直线 · R 矩形 · [ ] 笔刷 · - + 缩放 · Ctrl+Z 撤销 · Ctrl+S 存工程
         </p>
 
         {animation && (

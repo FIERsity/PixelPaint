@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PixelDoc } from "../lib/pixelDoc";
 import { docFromPixels } from "../lib/pixelDoc";
+import { checkerStyle } from "../lib/checker";
+import { urlToImageFile, type ImageTransfer } from "../lib/imageTransfer";
 
 interface CutoutProps {
   onImport: (doc: PixelDoc) => void;
   onNotice?: (msg: string) => void;
+  onSendToConvert: (file: File) => void;
+  incomingImage?: ImageTransfer | null;
+  onIncomingConsumed?: (id: number) => void;
 }
 
 type Phase = "idle" | "ready" | "running" | "done" | "error";
 
-export default function Cutout({ onImport, onNotice }: CutoutProps) {
+export default function Cutout({ onImport, onNotice, onSendToConvert, incomingImage, onIncomingConsumed }: CutoutProps) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [srcUrl, setSrcUrl] = useState<string | null>(null);
   const [srcFile, setSrcFile] = useState<File | null>(null);
@@ -18,8 +23,12 @@ export default function Cutout({ onImport, onNotice }: CutoutProps) {
   const [error, setError] = useState<string | null>(null);
   const [dragover, setDragover] = useState(false);
   const [model, setModel] = useState<"isnet" | "isnet_quint8">("isnet_quint8");
+  const [sending, setSending] = useState(false);
+  const [previewCell, setPreviewCell] = useState(1);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const previewImageRef = useRef<HTMLImageElement>(null);
+  const consumedIncomingRef = useRef<number | null>(null);
   const runningRef = useRef(false);
   // 跟踪当前 object URL，保证卸载时能释放（否则 Blob 泄漏到页面关闭）
   const urlsRef = useRef<{ src: string | null; result: string | null }>({ src: null, result: null });
@@ -40,8 +49,36 @@ export default function Cutout({ onImport, onNotice }: CutoutProps) {
     setResultUrl(null);
     setError(null);
     setProgress(null);
+    setPreviewCell(1);
     setPhase("ready");
   }, [srcUrl, resultUrl]);
+
+  const updatePreviewCell = useCallback(() => {
+    const image = previewImageRef.current;
+    if (!image || !image.naturalWidth) return;
+    const displayedWidth = image.getBoundingClientRect().width;
+    if (displayedWidth > 0) setPreviewCell(displayedWidth / image.naturalWidth);
+  }, []);
+
+  // 图片响应式缩放时同步棋盘格的单元尺寸，保持透明格与图像像素边界一致。
+  useEffect(() => {
+    const image = previewImageRef.current;
+    if (!image) return;
+    const observer = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(updatePreviewCell);
+    observer?.observe(image);
+    updatePreviewCell();
+    return () => observer?.disconnect();
+  }, [srcUrl, resultUrl, updatePreviewCell]);
+
+  // 从转像素模块流转过来的图片，作为新的输入载入。
+  useEffect(() => {
+    if (!incomingImage || consumedIncomingRef.current === incomingImage.id) return;
+    consumedIncomingRef.current = incomingImage.id;
+    loadFile(incomingImage.file);
+    onIncomingConsumed?.(incomingImage.id);
+  }, [incomingImage, loadFile, onIncomingConsumed]);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -102,6 +139,21 @@ export default function Cutout({ onImport, onNotice }: CutoutProps) {
     }
   };
 
+  const sendToConvert = async () => {
+    if (!resultUrl || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      const base = srcFile ? srcFile.name.replace(/\.[^.]+$/, "") : "cutout";
+      const file = await urlToImageFile(resultUrl, base + "-cutout.png");
+      onSendToConvert(file);
+    } catch {
+      setError("无法把结果送入转像素，请重试。");
+    } finally {
+      setSending(false);
+    }
+  };
+
   const download = () => {
     if (!resultUrl) return;
     const a = document.createElement("a");
@@ -156,15 +208,29 @@ export default function Cutout({ onImport, onNotice }: CutoutProps) {
             {phase === "done" && <span className="badge">已完成</span>}
           </div>
           {resultUrl ? (
-            <div className="preview-box checker">
-              <img src={resultUrl} alt="抠图结果" style={{ maxWidth: "100%" }} />
+            <div className="preview-box">
+              <img
+                ref={previewImageRef}
+                src={resultUrl}
+                alt="抠图结果"
+                className="checker"
+                onLoad={updatePreviewCell}
+                style={{ maxWidth: "100%", maxHeight: "60vh", display: "block", ...checkerStyle(previewCell) }}
+              />
             </div>
           ) : srcUrl ? (
-            <div className="preview-box checker">
-              <img src={srcUrl} alt="原图" style={{ maxWidth: "100%" }} />
+            <div className="preview-box">
+              <img
+                ref={previewImageRef}
+                src={srcUrl}
+                alt="原图"
+                className="checker"
+                onLoad={updatePreviewCell}
+                style={{ maxWidth: "100%", maxHeight: "60vh", display: "block", ...checkerStyle(previewCell) }}
+              />
             </div>
           ) : (
-            <div className="preview-box" style={{ color: "var(--muted)", fontSize: 13 }}>上传图片后点击「开始抠图」</div>
+            <div className="preview-box checker" style={{ color: "var(--muted)", fontSize: 13 }}>上传图片后点击「开始抠图」</div>
           )}
           {phase === "running" && progress && (
             <>
@@ -211,6 +277,9 @@ export default function Cutout({ onImport, onNotice }: CutoutProps) {
               <div className="tool-divider" />
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <button type="button" className="btn-primary" onClick={sendToCanvas}>发送到画板编辑</button>
+                <button type="button" className="btn-ghost" onClick={sendToConvert} disabled={sending}>
+                  {sending ? "准备中…" : "发送到转像素"}
+                </button>
                 <button type="button" className="btn-ghost" onClick={download}>下载 PNG</button>
               </div>
               <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 8, textAlign: "center" }}>
