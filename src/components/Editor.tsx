@@ -658,14 +658,38 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       ? shiftSelectionMask(moving.mask, doc.width, doc.height, moving.dx, moving.dy)
       : selectionRef.current;
     const img = ctx.createImageData(o.width, o.height);
-    const selectionAlpha = tool === "select" ? 52 : tool === "move" ? 42 : 26;
-    for (let index = 0; index < mask.length; index++) {
-      if (mask[index] === 0) continue;
+    const paintOverlayPixel = (index: number, r: number, g: number, b: number, a: number) => {
       const i = index * 4;
-      img.data[i] = 75;
-      img.data[i + 1] = 95;
-      img.data[i + 2] = 199;
-      img.data[i + 3] = selectionAlpha;
+      img.data[i] = r;
+      img.data[i + 1] = g;
+      img.data[i + 2] = b;
+      img.data[i + 3] = a;
+    };
+    const selectionGesture = tool === "select" && !moving ? selectionGestureRef.current : null;
+    if (selectionGesture) {
+      for (let index = 0; index < selectionGesture.before.length; index++) {
+        const wasSelected = selectionGesture.before[index] !== 0;
+        const inGesture = selectionGesture.gesture[index] !== 0;
+        if (selectionGesture.mode === "replace") {
+          if (inGesture) paintOverlayPixel(index, 75, 95, 199, 66);
+          continue;
+        }
+        if (wasSelected) paintOverlayPixel(index, 75, 95, 199, selectionGesture.mode === "subtract" ? 52 : 30);
+        if (!inGesture) continue;
+        if (selectionGesture.mode === "subtract") {
+          paintOverlayPixel(index, 220, 60, 60, wasSelected ? 92 : 30);
+        } else if (wasSelected) {
+          paintOverlayPixel(index, 75, 95, 199, selectionGesture.mode === "intersect" ? 88 : 76);
+        } else {
+          paintOverlayPixel(index, 65, 166, 210, selectionGesture.mode === "intersect" ? 34 : 62);
+        }
+      }
+    } else {
+      const selectionAlpha = tool === "select" ? 52 : tool === "move" ? 42 : 26;
+      for (let index = 0; index < mask.length; index++) {
+        if (mask[index] === 0) continue;
+        paintOverlayPixel(index, 75, 95, 199, selectionAlpha);
+      }
     }
     const rgb = parseHex(color) ?? [0, 0, 0];
     for (const [x, y] of preview) {
@@ -804,6 +828,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     }
     selectionRef.current = combineSelectionMasks(gesture.before, gesture.gesture, gesture.mode);
     renderOverlay();
+    refresh();
   };
 
   const beginSelectionGesture = (x: number, y: number, e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -817,7 +842,6 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       lastY: y,
     };
     updateSelectionGesture(x, y);
-    refresh();
   };
 
   const finishSelectionGesture = () => {
