@@ -4,6 +4,8 @@
 // 所有函数均为纯计算，可在 Worker 中运行。
 // ============================================================
 
+import { clampDimension } from "./dimensions";
+
 export type DitherMode = "none" | "floyd" | "bayer2" | "bayer4" | "atkinson";
 
 export interface ToPixelOptions {
@@ -285,7 +287,10 @@ export function imageToPixels(
   srcH: number,
   opts: ToPixelOptions,
 ): { pixels: Uint8ClampedArray; palette: Array<[number, number, number]> } {
-  let px = downsample(src, srcW, srcH, opts.outWidth, opts.outHeight);
+  // UI 会拦截非法输入，这里再做一次兜底，保证 Worker 收到 0 或小数时也不会崩溃。
+  const outWidth = clampDimension(opts.outWidth);
+  const outHeight = clampDimension(opts.outHeight);
+  let px = downsample(src, srcW, srcH, outWidth, outHeight);
 
   // 强制调色板量化
   let paletteColors: Array<[number, number, number]> = [];
@@ -304,7 +309,7 @@ export function imageToPixels(
       return best;
     };
     if (opts.dither !== "none") {
-      px = dither(px, opts.outWidth, opts.outHeight, opts.dither, mapColor);
+      px = dither(px, outWidth, outHeight, opts.dither, mapColor);
     } else {
       for (let i = 0; i < px.length; i += 4) {
         if (px[i + 3] === 0) continue;
@@ -328,7 +333,7 @@ export function imageToPixels(
         return best;
       };
       // 抖动要从降采样后的原色开始，而不是从已经量化过的 q 开始，否则误差已经被吃掉。
-      px = dither(sourcePx, opts.outWidth, opts.outHeight, opts.dither, mapColor);
+      px = dither(sourcePx, outWidth, outHeight, opts.dither, mapColor);
     } else {
       px = q;
     }

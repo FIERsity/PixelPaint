@@ -139,4 +139,11 @@ describe("imageToPixels", () => {
     });
     for (let i = 3; i < pixels.length; i += 4) expect(pixels[i]).toBe(0);
   });
+
+  it("非法输出尺寸会被安全归一化", () => {
+    const { pixels } = imageToPixels(solid(2, 2, [100, 150, 200]), 2, 2, {
+      outWidth: 0, outHeight: 0, maxColors: 4, palette: null, dither: "none",
+    });
+    expect(pixels).toHaveLength(1 * 1 * 4);
+  });
 });

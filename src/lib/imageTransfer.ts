@@ -1,9 +1,4 @@
-// 浏览器内模块之间传递图片结果时使用的轻量辅助函数。
-
-export interface ImageTransfer {
-  id: number;
-  file: File;
-}
+// 浏览器内生成图片文件的辅助函数。
 
 export function pixelsToPngFile(
   pixels: Uint8ClampedArray,
@@ -23,11 +18,4 @@ export function pixelsToPngFile(
       resolve(blob ? new File([blob], name, { type: "image/png" }) : null);
     }, "image/png");
   });
-}
-
-export async function urlToImageFile(url: string, name = "pixelpaint.png"): Promise<File> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`图片读取失败（${response.status}）`);
-  const blob = await response.blob();
-  return new File([blob], name, { type: blob.type || "image/png" });
 }

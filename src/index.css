@@ -1,18 +1,21 @@
 @import "tailwindcss";
 
 /* ============================================================
-   PixelPaint · 设计系统（对齐 TinyPress：极简 / 卡片 / 克制蓝）
+   PixelPaint · 设计系统（黑白灰 / 单一强调色 / 像素工具）
    ============================================================ */
 :root {
-  --bg: #f5f7fb;
+  --bg: #f3f3f1;
   --card: #ffffff;
-  --border: #e5e9f2;
-  --text: #1f2430;
-  --muted: #6b7280;
-  --primary: #3b82f6;
-  --primary-dark: #2563eb;
+  --border: #deded8;
+  --border-strong: #c7c7bf;
+  --text: #191919;
+  --muted: #70706a;
+  --primary: #4b5fc7;
+  --primary-dark: #394aa7;
+  --primary-soft: #eef0ff;
+  --primary-border: #c6cdf4;
   --green: #10b981;
-  --red: #ef4444;
+  --red: #a43f3f;
   --amber: #d97706;
   --radius: 14px;
   --shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.06);
@@ -95,7 +98,7 @@ button { font-family: inherit; }
   border-radius: 8px; border: none; background: none; color: var(--muted);
   cursor: pointer; transition: all 0.15s;
 }
-.tab:hover { color: var(--primary); background: #f0f6ff; }
+.tab:hover { color: var(--primary); background: var(--primary-soft); }
 .tab.active { background: var(--primary); color: #fff; }
 
 /* ---------- Cards ---------- */
@@ -117,7 +120,7 @@ button { font-family: inherit; }
   cursor: pointer; transition: background 0.15s;
 }
 .btn-primary:hover:not(:disabled) { background: var(--primary-dark); }
-.btn-primary:disabled { background: #c3d4f2; cursor: not-allowed; }
+.btn-primary:disabled { background: #c9cbd2; cursor: not-allowed; }
 
 .btn-ghost {
   font: inherit; font-size: 13px; color: var(--text); background: var(--card);
@@ -135,9 +138,9 @@ button { font-family: inherit; }
   min-width: 52px; transition: all 0.15s;
 }
 .tool-btn svg { color: var(--text); }
-.tool-btn:hover { background: #f0f6ff; }
+.tool-btn:hover { background: var(--primary-soft); }
 .tool-btn.active {
-  background: #e8f1ff; border-color: #bcd6ff; color: var(--primary-dark);
+  background: var(--primary-soft); border-color: var(--primary-border); color: var(--primary-dark);
 }
 .tool-btn.active svg { color: var(--primary-dark); }
 
@@ -153,11 +156,11 @@ button { font-family: inherit; }
 
 /* ---------- Dropzone ---------- */
 .drop-card {
-  border: 2px dashed #c9d4e8; cursor: pointer;
+  border: 2px dashed var(--border-strong); cursor: pointer;
   transition: border-color 0.2s, background 0.2s;
 }
-.drop-card:hover, .drop-card:focus-visible { border-color: var(--primary); background: #f0f6ff; outline: none; }
-.drop-card.dragover { border-color: var(--primary); background: #e8f1ff; }
+.drop-card:hover, .drop-card:focus-visible { border-color: var(--primary); background: var(--primary-soft); outline: none; }
+.drop-card.dragover { border-color: var(--primary); background: var(--primary-soft); }
 .drop-inner { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 34px 16px; text-align: center; }
 .drop-icon { color: var(--primary); opacity: 0.85; }
 .drop-title { font-size: 16px; font-weight: 600; }
@@ -166,10 +169,10 @@ button { font-family: inherit; }
 /* ---------- 像素棋盘格（透明背景） ---------- */
 .checker {
   background-image:
-    linear-gradient(45deg, #e8ecf3 25%, transparent 25%),
-    linear-gradient(-45deg, #e8ecf3 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #e8ecf3 75%),
-    linear-gradient(-45deg, transparent 75%, #e8ecf3 75%);
+    linear-gradient(45deg, #e5e5df 25%, transparent 25%),
+    linear-gradient(-45deg, #e5e5df 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #e5e5df 75%),
+    linear-gradient(-45deg, transparent 75%, #e5e5df 75%);
   /* 默认每个小格 8px；画布/像素预览会用内联样式覆盖为实际像素尺寸。 */
   background-size: 16px 16px;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
@@ -214,6 +217,12 @@ button { font-family: inherit; }
   .tool-btn { min-width: 44px; font-size: 10.5px; }
   .card { padding: 14px; margin-top: 14px; }
   .shortcut-hint { display: none; }
+  .convert-workbench { margin-top: 14px; }
+  .workbench-title { font-size: 21px; }
+  .workbench-desc { font-size: 12px; }
+  .source-card-copy { justify-content: flex-start; }
+  .preview-box { min-height: 240px; padding: 10px; }
+  .output-size-row .num-input { width: 72px; }
 }
 
 .tool-panel { padding: 12px; display: flex; flex-direction: column; gap: 6px; }
@@ -248,8 +257,8 @@ button { font-family: inherit; }
 .canvas-grid {
   position: absolute; inset: 0; pointer-events: none;
   background-image:
-    linear-gradient(rgba(31, 36, 48, 0.14) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(31, 36, 48, 0.14) 1px, transparent 1px);
+    linear-gradient(rgba(25, 25, 25, 0.16) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(25, 25, 25, 0.16) 1px, transparent 1px);
 }
 
 .shortcut-hint {
@@ -287,7 +296,7 @@ button { font-family: inherit; }
   cursor: pointer; transition: transform 0.1s;
 }
 .swatch:hover { transform: scale(1.1); }
-.swatch.active { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35); }
+.swatch.active { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(75, 95, 199, 0.3); }
 .color-row { display: flex; gap: 8px; align-items: center; }
 
 .layer-list { display: flex; flex-direction: column; gap: 6px; max-height: 200px; overflow: auto; }
@@ -296,8 +305,8 @@ button { font-family: inherit; }
   border: 1px solid var(--border); border-radius: 8px; font-size: 13px; cursor: pointer;
   transition: all 0.15s;
 }
-.layer-item:hover { border-color: #bcd6ff; }
-.layer-item.active { border-color: var(--primary); background: #f0f6ff; }
+.layer-item:hover { border-color: var(--primary-border); }
+.layer-item.active { border-color: var(--primary); background: var(--primary-soft); }
 .layer-item input[type="range"] { width: 56px; flex-shrink: 0; }
 .layer-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layer-eye { border: none; background: none; cursor: pointer; font-size: 13px; padding: 0; }
@@ -314,27 +323,62 @@ button { font-family: inherit; }
 .canvas-tools-card .size-row { margin-bottom: 12px; }
 .canvas-tools-card .size-row:last-child { margin-bottom: 0; }
 
-/* ---------- 转像素 / 后续处理布局 ---------- */
+/* ---------- 转像素工作区 ---------- */
+.convert-workbench { margin-top: 24px; }
+.workbench-head {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 20px;
+  margin-bottom: 18px;
+}
+.eyebrow {
+  color: var(--primary-dark); font-size: 11px; font-weight: 700;
+  letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 2px;
+}
+.workbench-title { font-size: 24px; line-height: 1.2; font-weight: 700; }
+.workbench-desc { color: var(--muted); font-size: 13px; margin-top: 5px; }
+.operation-switcher {
+  display: inline-flex; gap: 3px; padding: 3px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--card);
+}
+.operation-tab {
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--muted);
+  border: none; border-radius: 7px; padding: 8px 15px; background: transparent; cursor: pointer;
+}
+.operation-tab:hover { color: var(--primary-dark); background: var(--primary-soft); }
+.operation-tab.active { color: #fff; background: var(--primary); }
 .convert-layout {
   display: grid; grid-template-columns: 1fr 300px; gap: 16px;
-  margin-top: 24px; align-items: start;
+  align-items: start;
 }
-@media (max-width: 860px) { .convert-layout { grid-template-columns: 1fr; } }
-
-.workflow-step {
-  margin-top: 24px; padding: 18px;
-  border: 1px solid var(--border); border-radius: 12px;
-  background: var(--card);
+@media (max-width: 860px) {
+  .convert-layout { grid-template-columns: 1fr; }
+  .workbench-head { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .operation-switcher { width: 100%; }
+  .operation-tab { flex: 1; }
 }
-.workflow-step-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+.convert-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.source-card, .result-card, .operation-card { margin-top: 0; }
+.source-card { padding: 16px 18px; }
+.source-card-copy { display: flex; align-items: center; justify-content: center; gap: 12px; text-align: left; }
+.source-card .drop-icon { font-size: 28px; line-height: 1; font-weight: 300; }
+.source-card .drop-title { font-size: 14px; }
+.source-card .drop-hint { margin-top: 2px; }
+.operation-card { padding: 20px; }
+.operation-panel { min-width: 0; }
+.operation-empty {
+  padding: 12px; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--muted); background: var(--bg); font-size: 13px; margin-bottom: 16px;
 }
-.workflow-step-head .card-title { margin-bottom: 0; }
-.step-kicker {
-  margin: 0 0 3px; color: var(--primary-dark); font-size: 11px;
-  font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-}
-.workflow-step > .convert-layout { margin-top: 16px; }
+.field-hint { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.form-error { color: var(--red); font-size: 13px; margin-top: 8px; }
+.operation-main-action { width: 100%; margin-top: 4px; }
+.operation-actions, .operation-result-actions { display: flex; flex-direction: column; gap: 8px; }
+.operation-progress { margin: 6px 0 12px; }
+.progress-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+.result-empty { color: var(--muted); font-size: 13px; }
+.inline-check { margin-top: 6px; }
+.output-size-row .num-input { width: 78px; }
+.preset-swatches { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.preset-swatches span { width: 16px; height: 16px; border: 1px solid var(--border); border-radius: 4px; }
 
 .preview-box {
   display: flex; justify-content: center; align-items: center;
@@ -363,7 +407,7 @@ button { font-family: inherit; }
 .progress > div { height: 100%; background: var(--primary); transition: width 0.2s; }
 .badge {
   display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
-  background: #e8f1ff; color: var(--primary-dark); font-weight: 600;
+  background: var(--primary-soft); color: var(--primary-dark); font-weight: 600;
 }
 
 /* ---------- 帧动画条 ---------- */
@@ -396,10 +440,10 @@ button { font-family: inherit; }
   color: var(--text); background: rgba(255, 255, 255, 0.78);
   border-radius: 3px; padding: 0 4px; line-height: 1.4;
 }
-.frame-thumb:hover { border-color: #bcd6ff; }
+.frame-thumb:hover { border-color: var(--primary-border); }
 .frame-thumb.active {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 0 0 2px rgba(75, 95, 199, 0.3);
 }
 .frame-ops { display: flex; gap: 4px; margin-left: 4px; }
 .frame-op {

@@ -147,7 +147,7 @@ export default function App() {
 
   useEffect(() => () => window.clearTimeout(noticeTimer.current), []);
 
-  // 转像素 / 抠图结果 -> 画板（覆盖前确认）
+  // 转像素 / 背景处理结果 -> 画板（覆盖前确认）
   const handleImport = useCallback((next: PixelDoc) => {
     if (hasContent(doc) && !confirm("画板已有内容，导入会替换当前帧（可在画板里撤销）。继续？")) return;
     setAnim((a) => {
@@ -207,7 +207,7 @@ export default function App() {
             <div className="brand-icon"><BrandIcon /></div>
             <div>
               <h1>Pixel<span className="brand-sub">Paint</span></h1>
-              <p className="tagline">在线像素画工作站 · 画 / 转 / 精修 · 帧动画</p>
+              <p className="tagline">像素画工作站 · 画板 / 转像素 · 帧动画</p>
             </div>
           </div>
           <div className="header-actions">

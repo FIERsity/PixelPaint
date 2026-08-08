@@ -1,5 +1,5 @@
 // ============================================================
-// PixelPaint · 抠图结果的像素边缘处理
+// PixelPaint · 背景处理结果的像素边缘处理
 // ============================================================
 
 export type CutoutEdgeMode = "hard" | "soft";
@@ -15,7 +15,7 @@ function clampThreshold(value: number): number {
 
 /**
  * 把 AI 返回的连续 alpha 蒙版整理成适合像素画的 alpha。
- * sourceAlpha 用于保留输入 PNG 原本的透明区域，避免重新抠图把它们误判为主体。
+ * sourceAlpha 用于保留输入 PNG 原本的透明区域，避免背景处理时把它们误判为主体。
  */
 export function normalizeCutoutAlpha(
   pixels: Uint8ClampedArray,
@@ -61,7 +61,7 @@ async function readRaster(blob: Blob): Promise<RasterImage> {
 
 
 /**
- * 将抠图结果重新编码为 PNG，并按像素画规则处理 alpha 边缘。
+ * 将背景处理结果重新编码为 PNG，并按像素画规则处理 alpha 边缘。
  * 结果保持输入图像的像素尺寸，不做额外缩放。
  */
 export async function normalizeCutoutBlob(

@@ -675,13 +675,13 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
 
         <div className="tool-divider" />
         <div className="tool-panel-field">
-          <label className="field-label" htmlFor="brush-size">笔刷 [ ]</label>
+          <label className="field-label" htmlFor="brush-size">笔刷大小</label>
           <select id="brush-size" className="num-input" style={{ width: "100%" }} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))}>
             {[1, 2, 3, 4, 5].map((s) => <option key={s} value={s}>{s} px</option>)}
           </select>
         </div>
         <div className="tool-panel-field">
-          <label className="field-label" htmlFor="zoom-level">缩放 - +</label>
+          <label className="field-label" htmlFor="zoom-level">画布缩放</label>
           <select id="zoom-level" className="num-input" style={{ width: "100%" }} value={zoom} onChange={(e) => setZoom(Number(e.target.value))}>
             {ZOOMS.map((z) => <option key={z} value={z}>{z}×</option>)}
           </select>
@@ -743,7 +743,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
           </div>
         </div>
         <p className="shortcut-hint">
-          快捷键：B 铅笔 · E 橡皮 · I 取色 · G 填充 · L 直线 · R 矩形 · [ ] 笔刷 · - + 缩放 · Ctrl+Z 撤销 · Ctrl+S 存工程
+          快捷键：B 铅笔 · E 橡皮 · I 取色 · G 填充 · L 直线 · R 矩形 · [ ] 调整笔刷 · - + 调整缩放 · Ctrl+Z 撤销 · Ctrl+S 保存工程
         </p>
 
         {animation && (
@@ -808,7 +808,7 @@ export default function Editor({ doc, setDoc, onNotice, onionPixels, animation, 
           <div className="panel-head">
             <h2 className="card-title">调色板</h2>
           </div>
-          <label className="field-label" htmlFor="palette-select">预设</label>
+          <label className="field-label" htmlFor="palette-select">调色板预设</label>
           <select
             id="palette-select"
             className="num-input"
