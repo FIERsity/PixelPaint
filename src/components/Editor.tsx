@@ -268,6 +268,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const mobileDrawerRef = useRef<HTMLElement>(null);
   const frameMenuRef = useRef<HTMLDivElement>(null);
   const addedColorTimerRef = useRef<number | null>(null);
+  const colorPickerCloseTimerRef = useRef<number | null>(null);
   const [renderVersion, setVersion] = useState(0);
   const refresh = () => setVersion((v) => v + 1);
 
@@ -326,6 +327,20 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   } | null>(null);
 
   const askConfirm = useCallback((message: string) => onConfirm(message), [onConfirm]);
+
+  const cancelColorPickerClose = useCallback(() => {
+    if (colorPickerCloseTimerRef.current === null) return;
+    window.clearTimeout(colorPickerCloseTimerRef.current);
+    colorPickerCloseTimerRef.current = null;
+  }, []);
+
+  const scheduleColorPickerClose = useCallback(() => {
+    cancelColorPickerClose();
+    colorPickerCloseTimerRef.current = window.setTimeout(() => {
+      colorPickerCloseTimerRef.current = null;
+      setColorPickerOpen(false);
+    }, 220);
+  }, [cancelColorPickerClose]);
 
   const armCanvasColorPick = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -440,6 +455,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     const timer = palettePointerRef.current?.timer;
     if (timer !== null && timer !== undefined) window.clearTimeout(timer);
     if (addedColorTimerRef.current !== null) window.clearTimeout(addedColorTimerRef.current);
+    if (colorPickerCloseTimerRef.current !== null) window.clearTimeout(colorPickerCloseTimerRef.current);
   }, []);
 
   const commitCustomPalette = (next: Palette, palettes = customPalettes.map((item) => item.id === next.id ? next : item)) => {
@@ -2122,7 +2138,11 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
             ))}
           </div>
           <div className="color-row palette-color-add-row">
-            <div className="palette-color-picker-wrap" onPointerLeave={() => setColorPickerOpen(false)}>
+            <div
+              className="palette-color-picker-wrap"
+              onPointerEnter={cancelColorPickerClose}
+              onPointerLeave={scheduleColorPickerClose}
+            >
               <button
                 type="button"
                 className="palette-color-picker palette-color-picker-trigger"

@@ -482,6 +482,9 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
   border: 1px solid var(--border); border-radius: 10px; background: var(--card);
   box-shadow: 0 10px 28px rgba(25, 25, 25, 0.2);
 }
+.palette-color-popover::before {
+  content: ""; position: absolute; right: 0; bottom: 100%; left: 0; height: 9px;
+}
 .palette-color-sv {
   position: relative; width: 100%; height: 138px; overflow: hidden; border-radius: 7px; cursor: crosshair;
   background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent);
