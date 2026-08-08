@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { PixelDoc } from "../lib/pixelDoc";
 import { docFromPixels } from "../lib/pixelDoc";
 import Cutout from "./Cutout";
 import ResultPreview, { type PreviewOperation } from "./ResultPreview";
@@ -10,10 +9,12 @@ import { clampDimension, normalizeDimensionDraft, parseDimensionDraft } from "..
 import { pixelsToPngFile } from "../lib/imageTransfer";
 import { useI18n } from "../lib/i18n";
 import { SIZE_PRESET_VALUES, type SizePreset } from "../lib/sizePresets";
+import type { CanvasImportRequest } from "../lib/importFlow";
 
 interface ConvertProps {
-  onImport: (doc: PixelDoc) => void | Promise<void>;
+  onImport: (request: CanvasImportRequest) => void | Promise<void>;
   onNotice?: (msg: string) => void;
+  externalFile?: { id: number; file: File } | null;
 }
 
 interface Source {
@@ -29,7 +30,7 @@ interface Result {
   h: number;
 }
 
-export default function Convert({ onImport, onNotice }: ConvertProps) {
+export default function Convert({ onImport, onNotice, externalFile }: ConvertProps) {
   const { t } = useI18n();
   const [source, setSource] = useState<Source | null>(null);
   const [outW, setOutW] = useState(32);
@@ -51,6 +52,7 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
   const [backgroundInput, setBackgroundInput] = useState<File | null>(null);
   const [backgroundResult, setBackgroundResult] = useState<File | null>(null);
   const [backgroundUrl, setBackgroundUrl] = useState<string | null>(null);
+  const [backgroundFresh, setBackgroundFresh] = useState(false);
 
   const previewInputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -60,6 +62,7 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
   const sourceRef = useRef<Source | null>(null);
   const backgroundUrlRef = useRef<string | null>(null);
   const optsRef = useRef<ToPixelOptions | null>(null);
+  const externalFileIdRef = useRef<number | null>(null);
   sourceRef.current = source;
 
   const replaceBackgroundResult = useCallback((file: File | null) => {
@@ -179,6 +182,12 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
     }
   }, [clearBackgroundState, onNotice, setOutputDimensions, t]);
 
+  useEffect(() => {
+    if (!externalFile || externalFileIdRef.current === externalFile.id) return;
+    externalFileIdRef.current = externalFile.id;
+    void loadFile(externalFile.file);
+  }, [externalFile, loadFile]);
+
   const onWidthDraft = (raw: string) => {
     setWidthDraft(raw);
     const width = parseDimensionDraft(raw);
@@ -250,6 +259,7 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
       if (!file) throw new Error(t("createPngError"));
       setBackgroundInput(file);
       replaceBackgroundResult(null);
+      setBackgroundFresh(false);
       onNotice?.(t("switchToBackground"));
     } catch {
       setError(t("prepareBackgroundError"));
@@ -306,20 +316,20 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
       <div className="convert-layout">
         <section className="convert-main">
           <div
-            className={`card drop-card source-card ${dragover ? "dragover" : ""}`}
-            onClick={() => previewInputRef.current?.click()}
+            className={`card drop-card source-card ${source ? "has-source" : ""} ${dragover ? "dragover" : ""}`}
+            onClick={() => { if (!source) previewInputRef.current?.click(); }}
             onDragOver={(e) => { e.preventDefault(); setDragover(true); }}
             onDragLeave={() => setDragover(false)}
             onDrop={handleDrop}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
-                previewInputRef.current?.click();
+                if (!source) previewInputRef.current?.click();
               }
             }}
-            role="button"
-            tabIndex={0}
-            aria-label={sourceCardLabel}
+            role={source ? undefined : "button"}
+            tabIndex={source ? undefined : 0}
+            aria-label={source ? undefined : sourceCardLabel}
           >
             <input
               ref={previewInputRef}
@@ -334,20 +344,33 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
             />
             <div className="source-card-copy">
               <div className="drop-icon" aria-hidden="true">↑</div>
-              <div>
-                  <p className="drop-title">{sourceCardTitle}</p>
-                <p className="drop-hint">{sourceCardHint}</p>
+              <div className="source-card-details">
+                <p className="drop-title">{source ? source.name : sourceCardTitle}</p>
+                <p className="drop-hint">{source ? `${source.w} × ${source.h} · ${t("changeImage")}` : sourceCardHint}</p>
               </div>
+              {source && (
+                <div className="source-actions">
+                  <button type="button" className="mini-btn" onClick={() => previewInputRef.current?.click()}>{t("changeImageAction")}</button>
+                  <button type="button" className="mini-btn source-clear" onClick={() => {
+                    setSource(null); setResult(null); setAutoPalette([]); clearBackgroundState();
+                  }}>{t("clear")}</button>
+                </div>
+              )}
             </div>
           </div>
 
-          <ResultPreview
-            operation={operation}
-            result={result}
-            backgroundUrl={backgroundUrl}
-            busy={busy}
-            error={error}
-          />
+          {!source && error && <p className="form-error" role="alert">{error}</p>}
+
+          {source && (
+            <ResultPreview
+              operation={operation}
+              result={result}
+              backgroundUrl={backgroundUrl}
+              busy={busy}
+              error={error}
+              stale={operation === "background" && Boolean(backgroundResult) && !backgroundFresh}
+            />
+          )}
         </section>
 
         <aside className="card operation-card">
@@ -472,7 +495,12 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
                   className="btn-primary"
                   disabled={!result || busy}
                   onClick={() => {
-                    if (result) void onImport(docFromPixels(result.pixels, result.w, result.h, t("pixelize")));
+                    if (result && source) void onImport({
+                      doc: docFromPixels(result.pixels, result.w, result.h, t("pixelize")),
+                      source: "pixelize",
+                      sourceName: source.name,
+                      extractedColors: paletteName === NO_PALETTE.name ? autoPalette : undefined,
+                    });
                   }}
                 >
                   {busy ? t("converting") : t("sendToCanvas")}
@@ -497,6 +525,9 @@ export default function Convert({ onImport, onNotice }: ConvertProps) {
               onResult={replaceBackgroundResult}
               onImport={onImport}
               onNotice={onNotice}
+              sourceName={source?.name ?? backgroundInput?.name ?? "pixelpaint.png"}
+              extractedColors={paletteName === NO_PALETTE.name ? autoPalette : undefined}
+              onFreshnessChange={setBackgroundFresh}
             />
           )}
         </aside>

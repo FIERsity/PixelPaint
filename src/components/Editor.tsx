@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import {
   applyPixelChanges, brushOffsets, cloneDoc, composite, createDoc, docFromPixels,
   drawLinePoints, floodFill, getPixel, History, putPixel,
@@ -46,6 +46,7 @@ import {
   shiftSelectionMask,
   type SelectionMode,
 } from "../lib/selection";
+import type { CanvasImportRequest } from "../lib/importFlow";
 
 export interface AnimationProps {
   frames: PixelDoc[];
@@ -81,6 +82,8 @@ interface EditorProps {
   epoch?: number;
   onSaveProject?: () => void;
   onOpenProject?: (file: File) => Promise<void> | void;
+  onSendImageToPixelize?: (file: File) => void;
+  onCanvasImport?: (request: CanvasImportRequest) => void;
 }
 
 const ZOOMS = [1, 2, 4, 8, 16, 32];
@@ -128,6 +131,31 @@ interface CanvasDrag {
   lastY: number;
   moveStartDx: number;
   moveStartDy: number;
+}
+
+function useFocusTrap(open: boolean, ref: RefObject<HTMLElement | null>, onClose: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const selector = 'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])';
+    const frame = window.requestAnimationFrame(() => ref.current?.querySelector<HTMLElement>(selector)?.focus());
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
+      if (event.key !== "Tab" || !ref.current) return;
+      const items = [...ref.current.querySelectorAll<HTMLElement>(selector)];
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", keydown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", keydown);
+      previous?.focus();
+    };
+  }, [onClose, open, ref]);
 }
 
 function pixelsToCanvas(pixels: Uint8ClampedArray, width: number, height: number): HTMLCanvasElement {
@@ -181,18 +209,11 @@ function FrameThumb({ frame, active, index, onClick }: {
   );
 }
 
-function hasVisiblePixels(doc: PixelDoc) {
-  const pixels = composite(doc);
-  for (let i = 3; i < pixels.length; i += 4) {
-    if (pixels[i] !== 0) return true;
-  }
-  return false;
-}
-
-export default function Editor({ doc, setDoc, palette, customPalettes, onPaletteChange, onCustomPalettesChange, onNotice, onConfirm, onionPixels, animation, epoch = 0, onSaveProject, onOpenProject }: EditorProps) {
+export default function Editor({ doc, setDoc, palette, customPalettes, onPaletteChange, onCustomPalettesChange, onNotice, onConfirm, onionPixels, animation, epoch = 0, onSaveProject, onOpenProject, onSendImageToPixelize, onCanvasImport }: EditorProps) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
+  const canvasStageRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef(new History(80));
   const recorderRef = useRef<StrokeRecorder | null>(null);
   const layerCanvasesRef = useRef<Array<{ canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D }>>([]);
@@ -203,6 +224,9 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const paletteNameInputRef = useRef<HTMLInputElement>(null);
   const paletteManageRef = useRef<HTMLDivElement>(null);
   const paletteImportButtonRef = useRef<HTMLButtonElement>(null);
+  const paletteImportDialogRef = useRef<HTMLDivElement>(null);
+  const mobileDrawerRef = useRef<HTMLElement>(null);
+  const frameMenuRef = useRef<HTMLDivElement>(null);
   const addedColorTimerRef = useRef<number | null>(null);
   const [renderVersion, setVersion] = useState(0);
   const refresh = () => setVersion((v) => v + 1);
@@ -225,10 +249,15 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const [draggedColorIndex, setDraggedColorIndex] = useState<number | null>(null);
   const [dragOverColorIndex, setDragOverColorIndex] = useState<number | null>(null);
   const [dragOverPosition, setDragOverPosition] = useState<"before" | "after" | null>(null);
-  const dragPreviewRef = useRef<HTMLDivElement | null>(null);
+  const paletteGridRef = useRef<HTMLDivElement>(null);
+  const palettePointerRef = useRef<{
+    pointerId: number; pointerType: string; index: number; startX: number; startY: number; active: boolean; timer: number | null;
+  } | null>(null);
+  const suppressPaletteClickRef = useRef(false);
   const dragOverRef = useRef<{ index: number; position: "before" | "after" } | null>(null);
   const previousPaletteId = useRef(palette.id);
   const [zoom, setZoom] = useState(8);
+  const zoomRef = useRef(zoom);
   const [showGrid, setShowGrid] = useState(true);
   const [activeLayer, setActiveLayer] = useState(0);
   const [brushSize, setBrushSize] = useState(1);
@@ -239,9 +268,19 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const [canvasSizePreset, setCanvasSizePreset] = useState<SizePreset>(() => matchSquareSizePreset(doc.width, doc.height));
   const [exportScale, setExportScale] = useState(4);
   const [imageImportBusy, setImageImportBusy] = useState(false);
+  const [mobileDrawer, setMobileDrawer] = useState<"tools" | "palette" | null>(null);
+  const [recentColors, setRecentColors] = useState<string[]>(() => palette.colors.slice(0, 6));
+  const [framesExpanded, setFramesExpanded] = useState(() => (animation?.frames.length ?? 1) > 1);
+  const [frameMenuOpen, setFrameMenuOpen] = useState(false);
+  const previousFrameCountRef = useRef(animation?.frames.length ?? 1);
   const selectionRef = useRef<Uint8Array>(createSelectionMask(doc.width, doc.height));
   const selectionGestureRef = useRef<SelectionGesture | null>(null);
   const moveSessionRef = useRef<MoveSession | null>(null);
+  const activePointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const navigationRef = useRef(false);
+  const pinchRef = useRef<{
+    distance: number; centerX: number; centerY: number; scrollLeft: number; scrollTop: number; zoomIndex: number;
+  } | null>(null);
 
   const askConfirm = useCallback((message: string) => onConfirm(message), [onConfirm]);
 
@@ -258,6 +297,29 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const currentColorExists = normalizedCurrentColor ? currentPaletteColorSet.has(normalizedCurrentColor) : false;
   const canAddCurrentColor = paletteEditable && normalizedCurrentColor !== null && !currentColorExists;
   const paletteFileMerge = paletteFilePreview ? mergePaletteColors(palette.colors, paletteFilePreview.colors) : null;
+  const closePaletteImport = useCallback(() => setPaletteImportOpen(false), []);
+  const closeMobileDrawer = useCallback(() => setMobileDrawer(null), []);
+
+  useFocusTrap(paletteImportOpen, paletteImportDialogRef, closePaletteImport);
+  useFocusTrap(Boolean(mobileDrawer), mobileDrawerRef, closeMobileDrawer);
+
+  zoomRef.current = zoom;
+
+  useEffect(() => {
+    setRecentColors((items) => [color, ...items.filter((item) => item.toLowerCase() !== color.toLowerCase())].slice(0, 6));
+  }, [color]);
+
+  useEffect(() => {
+    const count = animation?.frames.length ?? 1;
+    const previous = previousFrameCountRef.current;
+    if (count <= 1) {
+      setFramesExpanded(false);
+      setFrameMenuOpen(false);
+    } else if (previous <= 1 && count > 1) {
+      setFramesExpanded(true);
+    }
+    previousFrameCountRef.current = count;
+  }, [animation?.frames.length]);
 
   const displayPaletteName = (item: Palette) => (
     item.id === "custom-default" && item.name === "自定义" ? t("paletteCustom") : item.name
@@ -288,16 +350,17 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   }, [paletteManageOpen]);
 
   useEffect(() => {
-    if (!paletteImportOpen) return;
-    const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPaletteImportOpen(false);
-    };
-    document.addEventListener("keydown", close);
-    return () => document.removeEventListener("keydown", close);
-  }, [paletteImportOpen]);
+    if (!frameMenuOpen) return;
+    const closePointer = (event: PointerEvent) => { if (!frameMenuRef.current?.contains(event.target as Node)) setFrameMenuOpen(false); };
+    const closeKey = (event: KeyboardEvent) => { if (event.key === "Escape") setFrameMenuOpen(false); };
+    document.addEventListener("pointerdown", closePointer);
+    document.addEventListener("keydown", closeKey);
+    return () => { document.removeEventListener("pointerdown", closePointer); document.removeEventListener("keydown", closeKey); };
+  }, [frameMenuOpen]);
 
   useEffect(() => () => {
-    dragPreviewRef.current?.remove();
+    const timer = palettePointerRef.current?.timer;
+    if (timer !== null && timer !== undefined) window.clearTimeout(timer);
     if (addedColorTimerRef.current !== null) window.clearTimeout(addedColorTimerRef.current);
   }, []);
 
@@ -396,48 +459,75 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   };
 
   const clearPaletteDrag = () => {
-    dragPreviewRef.current?.remove();
-    dragPreviewRef.current = null;
+    const timer = palettePointerRef.current?.timer;
+    if (timer !== null && timer !== undefined) window.clearTimeout(timer);
+    palettePointerRef.current = null;
     dragOverRef.current = null;
     setDraggedColorIndex(null);
     setDragOverColorIndex(null);
     setDragOverPosition(null);
   };
 
-  const startPaletteDrag = (e: React.DragEvent<HTMLButtonElement>, index: number, value: string) => {
-    if (!paletteEditable) return;
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", value);
-    setDraggedColorIndex(index);
-    updatePaletteDropState(null, null);
-
-    const preview = document.createElement("div");
-    preview.className = "palette-drag-preview";
-    preview.style.background = value;
-    document.body.appendChild(preview);
-    dragPreviewRef.current = preview;
-    e.dataTransfer.setDragImage(preview, 12, 12);
+  const beginPalettePointer = (e: React.PointerEvent<HTMLButtonElement>, index: number) => {
+    if (!paletteEditable || e.button !== 0) return;
+    const targetButton = e.currentTarget;
+    const activate = () => {
+      const pointer = palettePointerRef.current;
+      if (!pointer || pointer.pointerId !== e.pointerId) return;
+      pointer.active = true;
+      pointer.timer = null;
+      suppressPaletteClickRef.current = true;
+      setDraggedColorIndex(index);
+      updatePaletteDropState(index, "before");
+      try { targetButton.setPointerCapture(e.pointerId); } catch { /* optional */ }
+    };
+    palettePointerRef.current = {
+      pointerId: e.pointerId, pointerType: e.pointerType, index, startX: e.clientX, startY: e.clientY, active: false,
+      timer: e.pointerType === "touch" ? window.setTimeout(activate, 360) : null,
+    };
   };
 
-  const updatePaletteDropTarget = (e: React.DragEvent<HTMLDivElement>, index: number) => {
-    if (!paletteEditable || draggedColorIndex === null) return;
+  const movePalettePointer = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const pointer = palettePointerRef.current;
+    if (!pointer || pointer.pointerId !== e.pointerId) return;
+    if (!pointer.active) {
+      const distance = Math.hypot(e.clientX - pointer.startX, e.clientY - pointer.startY);
+      if (pointer.pointerType === "mouse" && distance > 2) {
+        pointer.active = true;
+        suppressPaletteClickRef.current = true;
+        setDraggedColorIndex(pointer.index);
+        updatePaletteDropState(pointer.index, "before");
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* optional */ }
+      } else {
+        if (pointer.pointerType === "touch" && distance > 7) clearPaletteDrag();
+        return;
+      }
+    }
     e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = "move";
-    const rect = e.currentTarget.getBoundingClientRect();
-    const position = e.clientX < rect.left + rect.width / 2 ? "before" : "after";
-    updatePaletteDropState(index, position);
+    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-palette-index]");
+    const index = Number(target?.dataset.paletteIndex);
+    if (!target || !Number.isInteger(index)) {
+      updatePaletteDropState(null, null);
+      return;
+    }
+    const rect = target.getBoundingClientRect();
+    updatePaletteDropState(index, e.clientX < rect.left + rect.width / 2 ? "before" : "after");
   };
 
-  const dropPaletteColor = (e: React.DragEvent<HTMLDivElement>, index: number) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (draggedColorIndex !== null && draggedColorIndex !== index) {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const position = e.clientX < rect.left + rect.width / 2 ? "before" : "after";
-      reorderPaletteColor(draggedColorIndex, index, position);
+  const endPalettePointer = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const pointer = palettePointerRef.current;
+    if (!pointer || pointer.pointerId !== e.pointerId) return;
+    if (pointer.active && dragOverRef.current) {
+      reorderPaletteColor(pointer.index, dragOverRef.current.index, dragOverRef.current.position);
     }
     clearPaletteDrag();
+    if (pointer.active) window.setTimeout(() => { suppressPaletteClickRef.current = false; }, 0);
+  };
+
+  const movePaletteColorByKeyboard = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (!paletteEditable || target < 0 || target >= palette.colors.length) return;
+    reorderPaletteColor(index, target, direction < 0 ? "before" : "after");
   };
 
   const openPaletteImport = () => {
@@ -533,6 +623,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       prevEpoch.current = epoch;
       historyRef.current.reset();
       recorderRef.current = null;
+      layerSigRef.current = "";
       selectionGestureRef.current = null;
       moveSessionRef.current = null;
       if (selectionRef.current.length !== doc.width * doc.height) {
@@ -1007,6 +1098,57 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     ];
   };
 
+  const beginPinchNavigation = () => {
+    const points = [...activePointersRef.current.values()];
+    const stage = canvasStageRef.current;
+    if (points.length < 2 || !stage) return;
+    const [a, b] = points;
+    pinchRef.current = {
+      distance: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)),
+      centerX: (a.x + b.x) / 2,
+      centerY: (a.y + b.y) / 2,
+      scrollLeft: stage.scrollLeft,
+      scrollTop: stage.scrollTop,
+      zoomIndex: Math.max(0, ZOOMS.indexOf(zoomRef.current)),
+    };
+    navigationRef.current = true;
+
+    if (drag.current.drawing) {
+      const activeTool = drag.current.tool;
+      drag.current.drawing = false;
+      if (activeTool === "pencil" || activeTool === "eraser") {
+        const entry = recorderRef.current?.entry() ?? null;
+        recorderRef.current = null;
+        if (entry) historyRef.current.push(entry);
+        commit();
+      } else if (activeTool === "select") {
+        cancelSelectionGesture();
+      } else if (activeTool === "line") {
+        recorderRef.current = null;
+        renderOverlay();
+      } else if (activeTool === "move") {
+        updateMoveOffset(drag.current.moveStartDx, drag.current.moveStartDy);
+      }
+      refresh();
+    }
+  };
+
+  const updatePinchNavigation = () => {
+    const points = [...activePointersRef.current.values()];
+    const pinch = pinchRef.current;
+    const stage = canvasStageRef.current;
+    if (points.length < 2 || !pinch || !stage) return;
+    const [a, b] = points;
+    const centerX = (a.x + b.x) / 2;
+    const centerY = (a.y + b.y) / 2;
+    stage.scrollLeft = pinch.scrollLeft - (centerX - pinch.centerX);
+    stage.scrollTop = pinch.scrollTop - (centerY - pinch.centerY);
+    const ratio = Math.max(0.25, Math.min(4, Math.hypot(b.x - a.x, b.y - a.y) / pinch.distance));
+    const nextIndex = Math.max(0, Math.min(ZOOMS.length - 1, pinch.zoomIndex + Math.round(Math.log2(ratio))));
+    const nextZoom = ZOOMS[nextIndex];
+    if (nextZoom !== zoomRef.current) setZoom(nextZoom);
+  };
+
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.button !== undefined && e.button !== 0) return;
     e.preventDefault();
@@ -1015,6 +1157,12 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     } catch {
       /* 指针捕获失败不阻断绘制（如合成事件/部分浏览器） */
     }
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (activePointersRef.current.size >= 2) {
+      beginPinchNavigation();
+      return;
+    }
+    if (navigationRef.current) return;
     const [x, y] = toPixel(e);
 
     if (moveSessionRef.current && tool !== "move") {
@@ -1098,6 +1246,13 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (activePointersRef.current.has(e.pointerId)) {
+      activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+    if (navigationRef.current) {
+      updatePinchNavigation();
+      return;
+    }
     if (!drag.current.drawing) return;
     const [x, y] = toPixel(e);
     const t = drag.current.tool;
@@ -1134,6 +1289,16 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    activePointersRef.current.delete(e.pointerId);
+    if (navigationRef.current) {
+      if (activePointersRef.current.size === 0) {
+        navigationRef.current = false;
+        pinchRef.current = null;
+      } else if (activePointersRef.current.size >= 2) {
+        beginPinchNavigation();
+      }
+      return;
+    }
     if (!drag.current.drawing) return;
     drag.current.drawing = false;
     const [x, y] = toPixel(e);
@@ -1160,7 +1325,12 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   };
 
   // 指针取消：直线还没落笔则丢弃；铅笔/橡皮保留已画部分
-  const onPointerCancel = () => {
+  const onPointerCancel = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    activePointersRef.current.delete(e.pointerId);
+    if (navigationRef.current) {
+      if (activePointersRef.current.size === 0) { navigationRef.current = false; pinchRef.current = null; }
+      return;
+    }
     if (!drag.current.drawing) return;
     const t = drag.current.tool;
     drag.current.drawing = false;
@@ -1250,7 +1420,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     try {
       bitmap = await createImageBitmap(file);
       if (bitmap.width > 512 || bitmap.height > 512) {
-        onNotice?.(t("notPixelArtNotice"));
+        onSendImageToPixelize?.(file);
         return;
       }
       const canvas = document.createElement("canvas");
@@ -1263,17 +1433,15 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const analysis = analyzePixelArt(image.data, image.width, image.height);
       if (!analysis.isPixelArt) {
-        onNotice?.(t("notPixelArtNotice"));
+        onSendImageToPixelize?.(file);
         return;
       }
-      if (hasVisiblePixels(doc) && !(await askConfirm(t("replaceCurrentFrameConfirm")))) return;
-
       const next = docFromPixels(image.data, image.width, image.height, t("importedImageLayer"));
-      withHistory(() => {
-        setDoc(next);
-        setActiveLayer(0);
-      });
-      onNotice?.(t("imageImported", { width: image.width, height: image.height }));
+      if (onCanvasImport) onCanvasImport({ doc: next, source: "image", sourceName: file.name });
+      else {
+        withHistory(() => { setDoc(next); setActiveLayer(0); });
+        onNotice?.(t("imageImported", { width: image.width, height: image.height }));
+      }
     } catch (error) {
       console.error("[PixelPaint] image import failed:", error);
       onNotice?.(t("imageImportError"));
@@ -1516,6 +1684,19 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const canUndo = historyRef.current.canUndo;
   const canRedo = historyRef.current.canRedo;
   const moveSession = moveSessionRef.current;
+  const fitCanvas = useCallback(() => {
+    const stage = canvasStageRef.current;
+    if (!stage) return;
+    const availableWidth = Math.max(1, stage.clientWidth - 28);
+    const availableHeight = Math.max(1, stage.clientHeight - 28);
+    const raw = Math.min(availableWidth / doc.width, availableHeight / doc.height);
+    const next = [...ZOOMS].reverse().find((value) => value <= raw) ?? ZOOMS[0];
+    setZoom(next);
+    window.requestAnimationFrame(() => {
+      stage.scrollLeft = Math.max(0, (doc.width * next - stage.clientWidth) / 2);
+      stage.scrollTop = Math.max(0, (doc.height * next - stage.clientHeight) / 2);
+    });
+  }, [doc.height, doc.width]);
   const localizeLayerName = (name: string) => {
     const match = name.match(/^(?:图层|Layer)\s+(\d+)$/);
     return match ? t("layerName", { index: Number(match[1]) }) : name;
@@ -1596,7 +1777,10 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
                       onClick={() => setSelectionMode(mode)}
                       aria-pressed={selectionMode === mode}
                       title={t(`selectionMode${mode[0].toUpperCase()}${mode.slice(1)}`)}
-                    >{mode === "replace" ? "□" : mode === "add" ? "+" : mode === "subtract" ? "−" : "∩"}</button>
+                    >
+                      <span className="selection-mode-icon" aria-hidden="true">{mode === "replace" ? "□" : mode === "add" ? "+" : mode === "subtract" ? "−" : "∩"}</span>
+                      <span className="selection-mode-label">{t(`selectionMode${mode[0].toUpperCase()}${mode.slice(1)}Short`)}</span>
+                    </button>
                   ))}
                 </div>
               </>
@@ -1627,7 +1811,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
             )}
           </div>
         )}
-        <div className="canvas-stage">
+        <div ref={canvasStageRef} className="canvas-stage">
           <div
             className="canvas-wrap checker"
             style={{ width: doc.width * cell, height: doc.height * cell, ...canvasChecker }}
@@ -1659,7 +1843,23 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
         <p className="shortcut-hint">{t("shortcutHint")}</p>
 
         {animation && (
-          <div className="frame-strip" role="toolbar" aria-label={t("frameAnimation")}>
+          <div className={`frame-strip ${framesExpanded ? "expanded" : "collapsed"}`} aria-label={t("frameAnimation")}>
+            <div className="frame-strip-head">
+              <div>
+                <strong>{t("frameAnimation")}</strong>
+                <span>{animation.frames.length === 1 ? t("oneFrame") : t("frameCount", { count: animation.frames.length })}</span>
+              </div>
+              {framesExpanded ? (
+                <button type="button" className="mini-btn frame-collapse" onClick={() => setFramesExpanded(false)}>{t("collapse")}</button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-ghost frame-expand-action"
+                  onClick={() => animation.frames.length === 1 ? animation.onFrameDuplicate() : setFramesExpanded(true)}
+                >{animation.frames.length === 1 ? t("makeAnimation") : t("expand")}</button>
+              )}
+            </div>
+            {framesExpanded && <>
             <div className="frame-controls">
               <button
                 type="button"
@@ -1692,24 +1892,34 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
                 />
               </label>
             </div>
+            <div className="frame-create-actions">
+              <button type="button" className="btn-ghost" onClick={animation.onFrameDuplicate}>{t("duplicateFrame")}</button>
+              <button type="button" className="btn-ghost" onClick={animation.onFrameAddBlank}>{t("newBlankFrame")}</button>
+            </div>
             <div className="frame-list">
               {animation.frames.map((f, i) => (
                 <FrameThumb
-                  key={f.layers[0]?.id ?? i}
+                  key={`${f.layers[0]?.id ?? "frame"}-${i}`}
                   frame={f}
                   index={i}
                   active={i === animation.frameIndex}
                   onClick={() => animation.onFrameSelect(i)}
                 />
               ))}
-              <div className="frame-ops">
-                <button type="button" className="frame-op" onClick={animation.onFrameAddBlank} title={t("newBlankFrame")} aria-label={t("newBlankFrame")}>＋</button>
-                <button type="button" className="frame-op" onClick={animation.onFrameDuplicate} title={t("duplicateFrame")} aria-label={t("duplicateFrame")}>⧉</button>
-                <button type="button" className="frame-op" onClick={() => animation.onFrameShift(-1)} title={t("moveLeft")} aria-label={t("moveLeft")}>‹</button>
-                <button type="button" className="frame-op" onClick={() => animation.onFrameShift(1)} title={t("moveRight")} aria-label={t("moveRight")}>›</button>
-                <button type="button" className="frame-op danger" onClick={() => void animation.onFrameDelete()} title={t("deleteFrame")} aria-label={t("deleteFrame")}>✕</button>
+              <div ref={frameMenuRef} className="frame-ops frame-menu-wrap">
+                <button type="button" className="frame-op" onClick={() => setFrameMenuOpen((open) => !open)} aria-expanded={frameMenuOpen} aria-label={t("frameActions")}>•••</button>
+                {frameMenuOpen && (
+                  <div className="frame-menu" role="menu">
+                    <strong>{t("frameTitle", { index: animation.frameIndex + 1 })}</strong>
+                    <button type="button" role="menuitem" disabled={animation.frameIndex === 0} onClick={() => { animation.onFrameShift(-1); setFrameMenuOpen(false); }}>{t("moveLeft")}</button>
+                    <button type="button" role="menuitem" disabled={animation.frameIndex === animation.frames.length - 1} onClick={() => { animation.onFrameShift(1); setFrameMenuOpen(false); }}>{t("moveRight")}</button>
+                    <button type="button" role="menuitem" className="danger" onClick={() => { void animation.onFrameDelete(); setFrameMenuOpen(false); }}>{t("deleteFrame")}</button>
+                  </div>
+                )}
               </div>
             </div>
+            <p className="frame-gif-hint">{animation.frames.length < 2 ? t("gifNeedsFrames") : t("frameGifReady")}</p>
+            </>}
           </div>
         )}
       </section>
@@ -1786,45 +1996,33 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
             </div>
           )}
           <div
+            ref={paletteGridRef}
             className={`palette-grid ${draggedColorIndex !== null ? "is-dragging" : ""}`}
-            onDragOver={(e) => {
-              if (draggedColorIndex === null || e.target !== e.currentTarget) return;
-              e.preventDefault();
-              e.dataTransfer.dropEffect = "move";
-              updatePaletteDropState(null, null);
-            }}
-            onDrop={(e) => {
-              if (e.target !== e.currentTarget) return;
-              e.preventDefault();
-              if (draggedColorIndex !== null && palette.colors.length > 0) {
-                reorderPaletteColor(draggedColorIndex, palette.colors.length - 1, "after");
-              }
-              clearPaletteDrag();
-            }}
           >
             {palette.colors.length === 0 && <p className="palette-empty">{t("paletteEmpty")}</p>}
             {palette.colors.map((c, index) => (
               <div
                 key={`${c}-${index}`}
+                data-palette-index={index}
                 className={`palette-swatch-item ${draggedColorIndex === index ? "is-dragging" : ""} ${dragOverColorIndex === index && draggedColorIndex !== index ? `drop-${dragOverPosition}` : ""} ${recentlyAddedColor === c ? "is-new" : ""}`}
-                onDragOver={(e) => updatePaletteDropTarget(e, index)}
-                onDragLeave={(e) => {
-                  const related = e.relatedTarget as Node | null;
-                  if (related && e.currentTarget.contains(related)) return;
-                  if (dragOverRef.current?.index === index) {
-                    updatePaletteDropState(null, null);
-                  }
-                }}
-                onDrop={(e) => dropPaletteColor(e, index)}
               >
                 <button
                   type="button"
                   className={`swatch ${color.toLowerCase() === c.toLowerCase() ? "active" : ""}`}
                   style={{ background: c }}
-                  onClick={() => { setColor(c); setColorText(c); }}
-                  draggable={paletteEditable}
-                  onDragStart={(e) => startPaletteDrag(e, index, c)}
-                  onDragEnd={clearPaletteDrag}
+                  onClick={(e) => {
+                    if (suppressPaletteClickRef.current) { e.preventDefault(); return; }
+                    setColor(c); setColorText(c);
+                  }}
+                  onPointerDown={(e) => beginPalettePointer(e, index)}
+                  onPointerMove={movePalettePointer}
+                  onPointerUp={endPalettePointer}
+                  onPointerCancel={endPalettePointer}
+                  onKeyDown={(e) => {
+                    if (!e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+                    e.preventDefault();
+                    movePaletteColorByKeyboard(index, e.key === "ArrowLeft" ? -1 : 1);
+                  }}
                   title={c}
                   aria-label={t("color", { value: c })}
                 />
@@ -1862,7 +2060,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
               onClick={addCurrentColor}
               disabled={!canAddCurrentColor}
               title={!paletteEditable ? t("paletteReadonly") : currentColorExists ? t("paletteColorExists") : undefined}
-            >{t("paletteAddColor")}</button>
+            >{currentColorExists ? t("paletteColorExists") : t("paletteAddColor")}</button>
           </div>
           <div className="palette-export-actions">
             <span className="field-hint">{t("paletteExport")}</span>
@@ -2013,9 +2211,78 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
         </div>
       </aside>
     </div>
+    <nav className="mobile-editor-dock" aria-label={t("drawingTools")}>
+      <button type="button" className="dock-tool" onClick={() => setMobileDrawer("tools")}>
+        <PixelIcon data={TOOLS.find((item) => item.id === tool)?.icon ?? Pencil} size={22} />
+        <span>{t(TOOLS.find((item) => item.id === tool)?.labelKey ?? "pencil")}</span>
+      </button>
+      <button type="button" className="dock-color" style={{ background: color }} onClick={() => setMobileDrawer("palette")} aria-label={t("palette")} />
+      <div className="dock-recent-colors" aria-label={t("recentColors")}>
+        {recentColors.map((value) => (
+          <button key={value} type="button" style={{ background: value }} onClick={() => { setColor(value); setColorText(value); }} aria-label={t("color", { value })} />
+        ))}
+      </div>
+      <button type="button" className="dock-icon" onClick={undo} disabled={!canUndo} aria-label={t("undo")}><PixelIcon data={Undo} size={19} /></button>
+      <button type="button" className="dock-icon" onClick={redo} disabled={!canRedo} aria-label={t("redo")}><PixelIcon data={Redo} size={19} /></button>
+    </nav>
+
+    {mobileDrawer && (
+      <div className="mobile-drawer-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMobileDrawer(null); }}>
+        <section ref={mobileDrawerRef} className="mobile-editor-drawer" role="dialog" aria-modal="true" aria-labelledby="mobile-drawer-title">
+          <div className="mobile-drawer-head">
+            <h2 id="mobile-drawer-title">{mobileDrawer === "tools" ? t("drawingTools") : t("palette")}</h2>
+            <button type="button" className="mini-btn" onClick={() => setMobileDrawer(null)} aria-label={t("cancel")}>✕</button>
+          </div>
+          {mobileDrawer === "tools" ? (
+            <>
+              <div className="mobile-tool-grid">
+                {TOOLS.map((item) => (
+                  <button key={item.id} type="button" className={`tool-btn ${tool === item.id ? "active" : ""}`} onClick={() => { chooseTool(item.id); setMobileDrawer(null); }} aria-pressed={tool === item.id}>
+                    <PixelIcon data={item.icon} size={24} /><span>{t(item.labelKey)}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="mobile-drawer-settings">
+                <label>{t("brushSize")}<select className="num-input" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))}>{[1, 2, 3, 4, 5].map((size) => <option key={size} value={size}>{size} px</option>)}</select></label>
+                <label>{t("canvasZoom")}<select className="num-input" value={zoom} onChange={(e) => setZoom(Number(e.target.value))}>{ZOOMS.map((value) => <option key={value} value={value}>{value}×</option>)}</select></label>
+                <button type="button" className="btn-ghost" onClick={() => { fitCanvas(); setMobileDrawer(null); }}>{t("fitToScreen")}</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <select className="num-input mobile-palette-select" value={palette.id} onChange={(e) => selectPalette(e.target.value)} aria-label={t("paletteCurrent")}>
+                <optgroup label={t("paletteMy")}>{customPalettes.map((item) => <option key={item.id} value={item.id}>{displayPaletteName(item)}</option>)}</optgroup>
+                <optgroup label={t("paletteBuiltIn")}>{BUILTIN_PALETTES.map((item) => <option key={item.id} value={item.id}>{item.name === "灰度" ? t("paletteGrayscale") : item.name}</option>)}</optgroup>
+              </select>
+              <div className={`palette-grid mobile-palette-grid ${draggedColorIndex !== null ? "is-dragging" : ""}`}>
+                {palette.colors.map((value, index) => (
+                  <div key={`${value}-${index}`} data-palette-index={index} className={`palette-swatch-item ${draggedColorIndex === index ? "is-dragging" : ""} ${dragOverColorIndex === index && draggedColorIndex !== index ? `drop-${dragOverPosition}` : ""}`}>
+                    <button type="button" className={`swatch ${color.toLowerCase() === value.toLowerCase() ? "active" : ""}`} style={{ background: value }}
+                      onClick={(event) => { if (suppressPaletteClickRef.current) { event.preventDefault(); return; } setColor(value); setColorText(value); }}
+                      onPointerDown={(event) => beginPalettePointer(event, index)} onPointerMove={movePalettePointer} onPointerUp={endPalettePointer} onPointerCancel={endPalettePointer}
+                      aria-label={t("color", { value })} />
+                    {paletteEditable && <button type="button" className="palette-swatch-remove" onClick={() => removePaletteColor(index)} aria-label={`${t("removeColor")} ${value}`}>×</button>}
+                  </div>
+                ))}
+              </div>
+              <div className="color-row palette-color-add-row">
+                <input type="color" className="palette-color-picker" value={color} onChange={(e) => { setColor(e.target.value); setColorText(e.target.value); }} aria-label={t("chooseColor")} />
+                <input className="text-input palette-hex-input" value={colorText} onChange={(e) => { setColorText(e.target.value); const rgb = parseHex(e.target.value); if (rgb) setColor(rgbToHex(rgb[0], rgb[1], rgb[2])); }} onBlur={() => setColorText(color)} aria-label={t("colorHex")} />
+                <button type="button" className="btn-primary palette-add-color-btn" onClick={addCurrentColor} disabled={!canAddCurrentColor}>{currentColorExists ? t("paletteColorExists") : t("paletteAddColor")}</button>
+              </div>
+              <div className="mobile-palette-actions">
+                <button type="button" className="btn-ghost" onClick={addCustomPalette}>{t("paletteNew")}</button>
+                <button type="button" className="btn-ghost" onClick={openPaletteImport} disabled={!paletteEditable}>{t("paletteImportColors")}</button>
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+    )}
     {paletteImportOpen && (
       <div className="modal-overlay palette-import-overlay" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setPaletteImportOpen(false); }}>
         <div
+          ref={paletteImportDialogRef}
           className="modal palette-import-modal"
           role="dialog"
           aria-modal="true"

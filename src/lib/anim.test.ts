@@ -26,6 +26,7 @@ describe("anim 帧操作", () => {
     const a = createAnim(16, 16);
     putPixel(a.frames[0].layers[0].pixels, 16, 1, 1, 255, 0, 0, 255);
     const b = addFrame(a, "duplicate");
+    expect(b.frames[1].layers[0].id).not.toBe(a.frames[0].layers[0].id);
     // 复制帧在 (1,1) 有原内容：idx=(1*16+1)*4+3=71
     expect(b.frames[1].layers[0].pixels[71]).toBe(255);
     // 修改原帧不影响复制帧

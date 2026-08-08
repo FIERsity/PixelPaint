@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from "react";
-import type { PixelDoc } from "../lib/pixelDoc";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { docFromPixels } from "../lib/pixelDoc";
 import {
   normalizeCutoutBlob,
@@ -8,19 +7,23 @@ import {
   type PixelCutoutScope,
 } from "../lib/cutout";
 import { useI18n } from "../lib/i18n";
+import type { CanvasImportRequest } from "../lib/importFlow";
 
 interface CutoutProps {
   inputFile: File | null;
   resultFile: File | null;
   onResult: (file: File) => void;
-  onImport: (doc: PixelDoc) => void | Promise<void>;
+  onImport: (request: CanvasImportRequest) => void | Promise<void>;
   onNotice?: (msg: string) => void;
+  sourceName: string;
+  extractedColors?: string[];
+  onFreshnessChange?: (fresh: boolean) => void;
 }
 
 type Phase = "idle" | "ready" | "running" | "done" | "error";
 type CutoutMethod = "pixel" | "ai";
 
-export default function Cutout({ inputFile, resultFile, onResult, onImport, onNotice }: CutoutProps) {
+export default function Cutout({ inputFile, resultFile, onResult, onImport, onNotice, sourceName, extractedColors, onFreshnessChange }: CutoutProps) {
   const { t } = useI18n();
   const [phase, setPhase] = useState<Phase>(inputFile ? "ready" : "idle");
   const [progress, setProgress] = useState<{ label: string; pct: number } | null>(null);
@@ -31,6 +34,8 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
   const [model, setModel] = useState<"isnet" | "isnet_quint8">("isnet_quint8");
   const [edgeMode, setEdgeMode] = useState<CutoutEdgeMode>("hard");
   const [threshold, setThreshold] = useState(128);
+  const [inputVersion, setInputVersion] = useState(0);
+  const [resultSignature, setResultSignature] = useState<string | null>(null);
 
   const previousInputRef = useRef<File | null>(inputFile);
   const runningRef = useRef(false);
@@ -44,10 +49,32 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
     setPhase(inputFile ? "ready" : "idle");
     setProgress(null);
     setError(null);
+    setInputVersion((version) => version + 1);
   }, [inputFile]);
 
-  const run = async () => {
+  const signature = useMemo(() => JSON.stringify({
+    inputVersion,
+    method,
+    scope: method === "pixel" ? scope : undefined,
+    tolerance: method === "pixel" ? tolerance : undefined,
+    model: method === "ai" ? model : undefined,
+    edgeMode: method === "ai" ? edgeMode : undefined,
+    threshold: method === "ai" && edgeMode === "hard" ? threshold : undefined,
+  }), [edgeMode, inputVersion, method, model, scope, threshold, tolerance]);
+  const resultFresh = Boolean(resultFile && resultSignature === signature);
+
+  useEffect(() => onFreshnessChange?.(resultFresh), [onFreshnessChange, resultFresh]);
+
+  useEffect(() => {
+    if (!inputFile) return;
+    runIdRef.current += 1;
+    runningRef.current = false;
+    if (resultFile && resultSignature !== signature) setPhase("ready");
+  }, [inputFile, resultFile, resultSignature, signature]);
+
+  const run = useCallback(async () => {
     if (!inputFile || runningRef.current) return;
+    const runSignature = signature;
     const runId = runIdRef.current + 1;
     runIdRef.current = runId;
     runningRef.current = true;
@@ -85,6 +112,7 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
       const base = inputFile.name.replace(/\.[^.]+$/, "") || "pixelpaint";
       const file = new File([normalized], base + "-background.png", { type: "image/png" });
       onResult(file);
+      setResultSignature(runSignature);
       setProgress(null);
       setPhase("done");
       onNotice?.(method === "pixel"
@@ -98,10 +126,16 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
     } finally {
       if (runId === runIdRef.current) runningRef.current = false;
     }
-  };
+  }, [edgeMode, inputFile, method, model, onNotice, onResult, scope, signature, t, threshold, tolerance]);
+
+  useEffect(() => {
+    if (!inputFile || method !== "pixel") return;
+    const timer = window.setTimeout(() => void run(), 320);
+    return () => window.clearTimeout(timer);
+  }, [inputFile, method, run, scope, tolerance]);
 
   const sendToCanvas = async () => {
-    if (!resultFile) return;
+    if (!resultFile || !resultFresh) return;
     try {
       const bitmap = await createImageBitmap(resultFile);
       const canvas = document.createElement("canvas");
@@ -112,14 +146,19 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
       ctx.drawImage(bitmap, 0, 0);
       bitmap.close();
       const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      void onImport(docFromPixels(image.data, image.width, image.height, t("background")));
+      void onImport({
+        doc: docFromPixels(image.data, image.width, image.height, t("background")),
+        source: "background",
+        sourceName,
+        extractedColors,
+      });
     } catch {
       setError(t("sendBackgroundError"));
     }
   };
 
   const download = () => {
-    if (!resultFile) return;
+    if (!resultFile || !resultFresh) return;
     const url = URL.createObjectURL(resultFile);
     const a = document.createElement("a");
     a.href = url;
@@ -255,14 +294,14 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
         disabled={!inputFile || phase === "running"}
         onClick={run}
       >
-        {phase === "running" ? t("processing") : method === "pixel" ? t("startPixelBackground") : t("startBackground")}
+        {phase === "running" ? t("processing") : method === "pixel" ? t("refreshPixelBackground") : t("startBackground")}
       </button>
 
       <div className="operation-actions background-result-actions">
         <button
           type="button"
           className="btn-ghost operation-secondary-action background-result-button"
-          disabled={!resultFile || phase === "running"}
+          disabled={!resultFresh || phase === "running"}
           onClick={sendToCanvas}
         >
           {t("sendToCanvas")}
@@ -271,7 +310,7 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
         <button
           type="button"
           className="btn-ghost operation-secondary-action background-result-button"
-          disabled={!resultFile || phase === "running"}
+          disabled={!resultFresh || phase === "running"}
           onClick={download}
         >
           {t("downloadPng")}

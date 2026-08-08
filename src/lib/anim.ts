@@ -3,7 +3,7 @@
 // 一个动画 = 若干帧，每帧是一个独立 PixelDoc（宽高/图层独立）
 // ============================================================
 
-import { createDoc, cloneDoc, type PixelDoc } from "./pixelDoc";
+import { createDoc, cloneDoc, uid, type PixelDoc } from "./pixelDoc";
 import type { Palette } from "./palette";
 
 export interface PixelAnim {
@@ -17,7 +17,8 @@ export function createAnim(width = 32, height = 32, fps = 8, layerName = "图层
 }
 
 export function cloneFrame(doc: PixelDoc): PixelDoc {
-  return cloneDoc(doc);
+  const clone = cloneDoc(doc);
+  return { ...clone, layers: clone.layers.map((layer) => ({ ...layer, id: uid() })) };
 }
 
 /** 在当前帧之后插入新帧；blank = 空白同尺寸，duplicate = 复制当前帧 */

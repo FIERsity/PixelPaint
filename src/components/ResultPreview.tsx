@@ -16,9 +16,10 @@ interface ResultPreviewProps {
   backgroundUrl: string | null;
   busy: boolean;
   error: string | null;
+  stale?: boolean;
 }
 
-export default function ResultPreview({ operation, result, backgroundUrl, busy, error }: ResultPreviewProps) {
+export default function ResultPreview({ operation, result, backgroundUrl, busy, error, stale = false }: ResultPreviewProps) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -78,7 +79,7 @@ export default function ResultPreview({ operation, result, backgroundUrl, busy, 
     <div className="card result-card">
       <div className="panel-head">
         <h2 className="card-title">{t("resultPreview")}</h2>
-        {showBackground && <span className="badge">{t("transparentResult")}</span>}
+        {showBackground && <span className={`badge ${stale ? "warning" : ""}`}>{stale ? t("resultStale") : t("transparentResult")}</span>}
         {!showBackground && result && <span className="badge">{result.w} × {result.h} px</span>}
       </div>
 

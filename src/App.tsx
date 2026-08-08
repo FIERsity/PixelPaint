@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import Editor from "./components/Editor";
 import Convert from "./components/Convert";
 import {
@@ -9,12 +9,57 @@ import { CUSTOM_PALETTE, type Palette } from "./lib/palette";
 import { loadCustomPalettes, saveCustomPalettes } from "./lib/paletteStore";
 import { clearAutosave, downloadProject, loadAutosave, readProjectFile, saveAutosave } from "./lib/persist";
 import { useI18n } from "./lib/i18n";
+import { resolveImportedPalette, type CanvasImportRequest } from "./lib/importFlow";
 
 type Tab = "editor" | "convert";
 
-type PromptRequest =
-  | { id: number; kind: "notice"; message: string }
-  | { id: number; kind: "confirm"; message: string; resolve: (accepted: boolean) => void };
+type PromptRequest = { id: number; message: string; resolve: (accepted: boolean) => void };
+
+export interface ToastRequest {
+  kind?: "info" | "success" | "warning" | "error";
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  dedupKey?: string;
+  duration?: number;
+}
+
+interface ToastEntry extends ToastRequest { id: number }
+
+function useDialogFocus(open: boolean, ref: RefObject<HTMLElement | null>, onEscape: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const frame = window.requestAnimationFrame(() => {
+      const focusable = ref.current?.querySelector<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      );
+      focusable?.focus();
+    });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onEscape();
+        return;
+      }
+      if (event.key !== "Tab" || !ref.current) return;
+      const items = [...ref.current.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      )];
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", onKeyDown);
+      previous?.focus();
+    };
+  }, [onEscape, open, ref]);
+}
 
 const TABS: Array<{ id: Tab; labelKey: string }> = [
   { id: "editor", labelKey: "editor" },
@@ -55,12 +100,22 @@ export default function App() {
   const [onion, setOnion] = useState(false);
   const [onionNext, setOnionNext] = useState(false);
   const [promptQueue, setPromptQueue] = useState<PromptRequest[]>([]);
+  const [toasts, setToasts] = useState<ToastEntry[]>([]);
+  const [importRequest, setImportRequest] = useState<CanvasImportRequest | null>(null);
+  const [pixelizeTransfer, setPixelizeTransfer] = useState<{ id: number; file: File } | null>(null);
+  const [autosaveStatus, setAutosaveStatus] = useState<"saving" | "saved" | "failed">("saved");
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackSending, setFeedbackSending] = useState(false);
   const restoringRef = useRef(true);
   const promptQueueRef = useRef<PromptRequest[]>([]);
   const promptIdRef = useRef(0);
+  const toastIdRef = useRef(0);
+  const toastTimersRef = useRef(new Map<number, number>());
+  const scrollPositionsRef = useRef<Record<Tab, number>>({ editor: 0, convert: 0 });
+  const feedbackDialogRef = useRef<HTMLDivElement>(null);
+  const promptDialogRef = useRef<HTMLDivElement>(null);
+  const importDialogRef = useRef<HTMLDivElement>(null);
   const tRef = useRef(t);
   const customPalettesRef = useRef(customPalettes);
   tRef.current = t;
@@ -71,13 +126,37 @@ export default function App() {
     setPromptQueue(next);
   }, []);
 
+  const dismissToast = useCallback((id: number) => {
+    const timer = toastTimersRef.current.get(id);
+    if (timer !== undefined) window.clearTimeout(timer);
+    toastTimersRef.current.delete(id);
+    setToasts((items) => items.filter((item) => item.id !== id));
+  }, []);
+
+  const showToast = useCallback((request: ToastRequest) => {
+    const key = request.dedupKey ?? request.message;
+    setToasts((items) => {
+      if (items.some((item) => (item.dedupKey ?? item.message) === key)) return items;
+      const id = ++toastIdRef.current;
+      const entry: ToastEntry = { kind: "info", ...request, id };
+      const duration = request.duration ?? (entry.kind === "warning" ? 5000 : entry.kind === "error" ? 0 : 3000);
+      if (duration > 0) {
+        const timer = window.setTimeout(() => dismissToast(id), duration);
+        toastTimersRef.current.set(id, timer);
+      }
+      return [...items, entry];
+    });
+  }, [dismissToast]);
+
   const showNotice = useCallback((msg: string) => {
-    if (promptQueueRef.current.some((item) => item.kind === "notice" && item.message === msg)) return;
-    enqueuePrompt({ id: ++promptIdRef.current, kind: "notice", message: msg });
-  }, [enqueuePrompt]);
+    const kind = /失败|无法|failed|could not|error/i.test(msg)
+      ? "error"
+      : /至少|请先|不像|invalid|keep at least|try .*first/i.test(msg) ? "warning" : "info";
+    showToast({ kind, message: msg });
+  }, [showToast]);
 
   const askConfirm = useCallback((message: string) => new Promise<boolean>((resolve) => {
-    enqueuePrompt({ id: ++promptIdRef.current, kind: "confirm", message, resolve });
+    enqueuePrompt({ id: ++promptIdRef.current, message, resolve });
   }), [enqueuePrompt]);
 
   const finishPrompt = useCallback((accepted: boolean) => {
@@ -86,20 +165,19 @@ export default function App() {
     const next = promptQueueRef.current.slice(1);
     promptQueueRef.current = next;
     setPromptQueue(next);
-    if (active.kind === "confirm") active.resolve(accepted);
+    active.resolve(accepted);
   }, []);
 
   const closeFeedback = useCallback(() => {
     if (feedbackSending) return;
     setFeedbackOpen(false);
   }, [feedbackSending]);
+  const closeImportDialog = useCallback(() => setImportRequest(null), []);
+  const cancelPrompt = useCallback(() => finishPrompt(false), [finishPrompt]);
 
   const submitFeedback = useCallback(async () => {
     const text = feedbackText.trim();
-    if (!text) {
-      showNotice(t("feedbackEmpty"));
-      return;
-    }
+    if (!text) return;
     setFeedbackSending(true);
     try {
       const response = await fetch("https://feedback.070315.site/feedback", {
@@ -110,23 +188,22 @@ export default function App() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setFeedbackText("");
       setFeedbackOpen(false);
-      showNotice(t("feedbackSuccess"));
+      showToast({ kind: "success", message: t("feedbackSuccess") });
     } catch (error) {
       console.error("[PixelPaint] feedback submission failed:", error);
-      showNotice(t("feedbackFailure"));
+      showToast({ kind: "error", message: t("feedbackFailure"), dedupKey: "feedback-error" });
     } finally {
       setFeedbackSending(false);
     }
-  }, [feedbackText, showNotice, t]);
+  }, [feedbackText, showToast, t]);
 
-  useEffect(() => {
-    if (!feedbackOpen) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeFeedback();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeFeedback, feedbackOpen]);
+  useDialogFocus(feedbackOpen, feedbackDialogRef, closeFeedback);
+  useDialogFocus(promptQueue.length > 0, promptDialogRef, cancelPrompt);
+  useDialogFocus(Boolean(importRequest), importDialogRef, closeImportDialog);
+
+  useEffect(() => () => {
+    for (const timer of toastTimersRef.current.values()) window.clearTimeout(timer);
+  }, []);
 
   const doc = anim.frames[frameIndex] ?? anim.frames[0];
   const frames = anim.frames;
@@ -256,36 +333,88 @@ export default function App() {
   // 自动保存草稿（防抖）
   useEffect(() => {
     if (restoringRef.current) return;
+    setAutosaveStatus("saving");
     const t = window.setTimeout(() => {
       const res = saveAutosave(anim);
-      if (!res.ok) showNotice(tRef.current("autosaveError"));
+      if (res.ok) setAutosaveStatus("saved");
+      else {
+        setAutosaveStatus("failed");
+        showToast({ kind: "error", message: tRef.current("autosaveError"), dedupKey: "autosave-error" });
+      }
     }, 800);
     return () => window.clearTimeout(t);
-  }, [anim, showNotice]);
+  }, [anim, showToast]);
 
-  useEffect(() => {
-    if (promptQueue.length === 0) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        finishPrompt(false);
+  const switchTab = useCallback((next: Tab, scroll: "restore" | "top" = "restore") => {
+    if (next === tab) {
+      if (scroll === "top") window.scrollTo({ top: 0 });
+      return;
+    }
+    scrollPositionsRef.current[tab] = window.scrollY;
+    if (tab === "editor") setPlaying(false);
+    setTab(next);
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: scroll === "top" ? 0 : scrollPositionsRef.current[next] });
+    });
+  }, [tab]);
+
+  const requestCanvasImport = useCallback((request: CanvasImportRequest) => {
+    setImportRequest(request);
+  }, []);
+
+  const finishCanvasImport = useCallback((withPalette: boolean) => {
+    if (!importRequest) return;
+    let selectedPalette: Palette | null = null;
+    let nextPalettes = customPalettesRef.current;
+    let reused = false;
+    if (withPalette && importRequest.extractedColors?.length) {
+      const resolution = resolveImportedPalette(
+        customPalettesRef.current,
+        importRequest.sourceName,
+        importRequest.extractedColors,
+        t("extractedPaletteName"),
+      );
+      if (resolution) {
+        selectedPalette = resolution.palette;
+        nextPalettes = resolution.palettes;
+        reused = resolution.reused;
       }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [finishPrompt, promptQueue.length]);
-
-  // 像素化 / 背景处理结果 -> 画板（覆盖前确认）
-  const handleImport = useCallback(async (next: PixelDoc) => {
-    if (hasContent(doc) && !(await askConfirm(t("replaceCurrentFrameConfirm")))) return;
+    }
+    if (nextPalettes !== customPalettesRef.current) {
+      customPalettesRef.current = nextPalettes;
+      setCustomPalettes(nextPalettes);
+    }
+    const next = importRequest.doc;
     setAnim((a) => {
       const frames2 = a.frames.map((f, i) => (i === frameIndex ? next : f));
-      return { ...a, frames: frames2 };
+      return { ...a, frames: frames2, palette: selectedPalette ?? a.palette };
     });
-    setTab("editor");
+    setImportRequest(null);
+    switchTab("editor", "top");
     setEpoch((e) => e + 1);
-    showNotice(t("sentToCanvas", { width: next.width, height: next.height }));
-  }, [askConfirm, doc, frameIndex, showNotice, t]);
+    showToast({
+      kind: "success",
+      message: selectedPalette
+        ? t(reused ? "sentToCanvasPaletteReused" : "sentToCanvasWithPalette", { width: next.width, height: next.height, name: selectedPalette.name })
+        : t("sentToCanvas", { width: next.width, height: next.height }),
+    });
+  }, [frameIndex, importRequest, showToast, switchTab, t]);
+
+  const sendImageToPixelize = useCallback((file: File) => {
+    setPixelizeTransfer({ id: Date.now(), file });
+    switchTab("convert", "top");
+    showToast({ kind: "info", message: t("movedToPixelize") });
+  }, [showToast, switchTab, t]);
+
+  const offerImageToPixelize = useCallback((file: File) => {
+    showToast({
+      kind: "warning",
+      message: t("notPixelArtNotice"),
+      actionLabel: t("goToPixelize"),
+      onAction: () => sendImageToPixelize(file),
+      duration: 7000,
+    });
+  }, [sendImageToPixelize, showToast, t]);
 
   const startOver = async () => {
     if (!(await askConfirm(t("clearCanvasConfirm")))) return;
@@ -323,7 +452,7 @@ export default function App() {
     if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
       e.preventDefault();
       const next = e.key === "ArrowRight" ? (i + 1) % TABS.length : (i - 1 + TABS.length) % TABS.length;
-      setTab(TABS[next].id);
+      switchTab(TABS[next].id);
     }
   };
 
@@ -351,7 +480,7 @@ export default function App() {
                 aria-controls={`panel-${tabItem.id}`}
                 tabIndex={tab === tabItem.id ? 0 : -1}
                 className={`tab ${tab === tabItem.id ? "active" : ""}`}
-                onClick={() => setTab(tabItem.id)}
+                onClick={() => switchTab(tabItem.id)}
               >
                 {t(tabItem.labelKey)}
               </button>
@@ -384,8 +513,7 @@ export default function App() {
       </header>
 
       <main className="container">
-        {tab === "editor" && (
-          <div role="tabpanel" id="panel-editor" aria-labelledby="tab-editor">
+          <div role="tabpanel" id="panel-editor" aria-labelledby="tab-editor" hidden={tab !== "editor"}>
             <Editor
               doc={doc}
               setDoc={setDoc}
@@ -399,6 +527,8 @@ export default function App() {
               onionPixels={onionPixels}
               onSaveProject={saveProject}
               onOpenProject={openProject}
+              onSendImageToPixelize={offerImageToPixelize}
+              onCanvasImport={requestCanvasImport}
               animation={{
                 frames,
                 frameIndex,
@@ -418,15 +548,13 @@ export default function App() {
               }}
             />
           </div>
-        )}
-        {tab === "convert" && (
-          <div role="tabpanel" id="panel-convert" aria-labelledby="tab-convert">
+          <div role="tabpanel" id="panel-convert" aria-labelledby="tab-convert" hidden={tab !== "convert"}>
             <Convert
-              onImport={handleImport}
+              onImport={requestCanvasImport}
               onNotice={showNotice}
+              externalFile={pixelizeTransfer}
             />
           </div>
-        )}
       </main>
 
       {feedbackOpen && (
@@ -435,11 +563,10 @@ export default function App() {
           role="presentation"
           onMouseDown={(e) => { if (e.target === e.currentTarget) closeFeedback(); }}
         >
-          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="feedback-title">
+          <div ref={feedbackDialogRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="feedback-title">
             <h2 id="feedback-title">{t("feedbackTitle")}</h2>
             <p className="modal-hint">{t("feedbackHint")}</p>
             <textarea
-              autoFocus
               rows={4}
               maxLength={2000}
               value={feedbackText}
@@ -450,7 +577,7 @@ export default function App() {
               <button type="button" className="btn-ghost" onClick={closeFeedback} disabled={feedbackSending}>
                 {t("cancel")}
               </button>
-              <button type="button" className="btn-primary" onClick={() => void submitFeedback()} disabled={feedbackSending}>
+              <button type="button" className="btn-primary" onClick={() => void submitFeedback()} disabled={feedbackSending || feedbackText.trim().length === 0}>
                 {feedbackSending ? t("sending") : t("submit")}
               </button>
             </div>
@@ -464,17 +591,17 @@ export default function App() {
           role="presentation"
           onMouseDown={(e) => { if (e.target === e.currentTarget) finishPrompt(false); }}
         >
-          <div className="modal prompt-modal" role="dialog" aria-modal="true" aria-labelledby="prompt-title">
+          <div ref={promptDialogRef} className="modal prompt-modal" role="dialog" aria-modal="true" aria-labelledby="prompt-title">
             <div className="prompt-kicker">
-              <span className={`prompt-kind ${activePrompt.kind}`}>
-                <span aria-hidden="true">{activePrompt.kind === "confirm" ? "?" : "i"}</span>
-                {activePrompt.kind === "confirm" ? t("confirmTitle") : t("noticeTitle")}
+              <span className="prompt-kind confirm">
+                <span aria-hidden="true">?</span>
+                {t("confirmTitle")}
               </span>
               {promptQueue.length > 1 && (
                 <span className="prompt-position">{t("promptQueuePosition", { total: promptQueue.length })}</span>
               )}
             </div>
-            <h2 id="prompt-title">{activePrompt.kind === "confirm" ? t("confirmTitle") : t("noticeTitle")}</h2>
+            <h2 id="prompt-title">{t("confirmTitle")}</h2>
             <p className="prompt-message">{activePrompt.message}</p>
             {promptQueue.length > 1 && (
               <div className="prompt-queue" aria-label={t("promptQueueLabel")}>
@@ -491,18 +618,51 @@ export default function App() {
               </div>
             )}
             <div className="modal-actions">
-              {activePrompt.kind === "confirm" && (
-                <button type="button" className="btn-ghost" onClick={() => finishPrompt(false)}>
-                  {t("cancel")}
-                </button>
-              )}
-              <button type="button" className="btn-primary" autoFocus onClick={() => finishPrompt(true)}>
-                {activePrompt.kind === "confirm" ? t("confirmAction") : t("promptDismiss")}
+              <button type="button" className="btn-ghost" onClick={() => finishPrompt(false)}>{t("cancel")}</button>
+              <button type="button" className="btn-primary" onClick={() => finishPrompt(true)}>
+                {t("confirmAction")}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {importRequest && (
+        <div className="modal-overlay import-overlay" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) setImportRequest(null); }}>
+          <div ref={importDialogRef} className="modal import-modal" role="dialog" aria-modal="true" aria-labelledby="import-title">
+            <h2 id="import-title">{t("sendToCanvasConfirmTitle")}</h2>
+            <p className="import-summary"><strong>{importRequest.doc.width} × {importRequest.doc.height}</strong><span>{importRequest.sourceName}</span></p>
+            {hasContent(doc) && <p className="import-warning">{t("replaceCurrentFrameWarning")}</p>}
+            {importRequest.extractedColors && importRequest.extractedColors.length > 0 && (
+              <div className="import-palette-preview">
+                <p>{t("extractedPaletteOffer", { count: importRequest.extractedColors.length })}</p>
+                <div className="preset-swatches">
+                  {importRequest.extractedColors.map((color) => <span key={color} style={{ background: color }} title={color} />)}
+                </div>
+              </div>
+            )}
+            <div className="modal-actions import-actions-dialog">
+              <button type="button" className="btn-ghost" onClick={() => setImportRequest(null)}>{t("cancel")}</button>
+              <button type="button" className="btn-ghost" onClick={() => finishCanvasImport(false)}>{t("sendOnly")}</button>
+              {importRequest.extractedColors && importRequest.extractedColors.length > 0 && (
+                <button type="button" className="btn-primary" onClick={() => finishCanvasImport(true)}>{t("sendAndCreatePalette")}</button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="toast-region" aria-live="polite" aria-label={t("notifications")}>
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toast ${toast.kind ?? "info"}`} role={toast.kind === "error" ? "alert" : "status"}>
+            <span className="toast-message">{toast.message}</span>
+            {toast.actionLabel && toast.onAction && (
+              <button type="button" onClick={() => { toast.onAction?.(); dismissToast(toast.id); }}>{toast.actionLabel}</button>
+            )}
+            <button type="button" className="toast-close" onClick={() => dismissToast(toast.id)} aria-label={t("dismiss")}>×</button>
+          </div>
+        ))}
+      </div>
 
       <footer className="site-footer">
         <div className="container">
@@ -517,6 +677,7 @@ export default function App() {
               Pxlkit
             </a>
           </p>
+          <p className={`autosave-status ${autosaveStatus}`}>{t(autosaveStatus === "saving" ? "autosaveSaving" : autosaveStatus === "saved" ? "autosaveSaved" : "autosaveFailed")}</p>
         </div>
       </footer>
     </div>
