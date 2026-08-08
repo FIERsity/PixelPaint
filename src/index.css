@@ -339,30 +339,61 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
   display: grid; grid-template-columns: repeat(auto-fill, minmax(26px, 1fr));
   gap: 5px; margin-bottom: 10px;
 }
-.palette-swatch-item { position: relative; min-width: 0; }
-.palette-swatch-item[draggable="true"] { cursor: grab; }
-.palette-swatch-item[draggable="true"]:active { cursor: grabbing; }
+.palette-swatch-item {
+  position: relative; min-width: 0; border-radius: 9px;
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.18s ease, box-shadow 0.18s ease;
+  will-change: transform;
+}
 .swatch {
   display: block; width: 100%;
   aspect-ratio: 1; border-radius: 7px; border: 2px solid var(--border);
-  cursor: pointer; transition: transform 0.1s;
+  cursor: pointer; transition: transform 0.14s ease, box-shadow 0.14s ease;
 }
 .swatch:hover { transform: scale(1.1); }
 .swatch.active { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(75, 95, 199, 0.3); }
-.palette-swatch-actions {
-  position: absolute; top: -6px; right: -5px; display: flex; gap: 1px;
-  opacity: 0; transition: opacity 0.12s;
+.palette-swatch-item .swatch[draggable="true"] { cursor: grab; }
+.palette-swatch-item .swatch[draggable="true"]:active { cursor: grabbing; }
+.palette-swatch-item.is-dragging {
+  opacity: 0.82; transform: scale(0.9); z-index: 1;
+  outline: 1px dashed rgba(75, 95, 199, 0.5); outline-offset: -2px;
 }
-.palette-swatch-item:hover .palette-swatch-actions,
-.palette-swatch-item:focus-within .palette-swatch-actions { opacity: 1; }
-.palette-swatch-action {
-  width: 16px; height: 16px; padding: 0; border: 1px solid var(--border);
-  border-radius: 5px; color: var(--text); background: var(--card); font: inherit;
-  font-size: 11px; line-height: 12px; cursor: pointer;
+.palette-swatch-item.is-dragging .swatch {
+  opacity: 0.18; transform: scale(0.84); box-shadow: none;
 }
-.palette-swatch-action:hover:not(:disabled) { color: var(--primary); border-color: var(--primary); }
-.palette-swatch-action:disabled { color: var(--border-strong); cursor: not-allowed; }
-.palette-swatch-action.danger:hover { color: var(--red); border-color: var(--red); }
+.palette-swatch-item.is-dragging .palette-swatch-remove { opacity: 0.35; pointer-events: none; }
+.palette-swatch-item.drop-before { transform: translateX(5px) scale(1.03); }
+.palette-swatch-item.drop-after { transform: translateX(-5px) scale(1.03); }
+.palette-swatch-item.drop-before::before,
+.palette-swatch-item.drop-after::after {
+  content: ""; position: absolute; top: -4px; bottom: -4px; width: 3px;
+  border-radius: 999px; background: var(--primary); z-index: 2;
+  box-shadow: 0 0 0 3px rgba(75, 95, 199, 0.12);
+  animation: palette-drop-pulse 0.8s ease-in-out infinite;
+}
+.palette-swatch-item.drop-before::before { left: -5px; }
+.palette-swatch-item.drop-after::after { right: -5px; }
+.palette-swatch-remove {
+  position: absolute; top: -6px; right: -6px; z-index: 3;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 17px; height: 17px; padding: 0; border: 1px solid var(--border);
+  border-radius: 999px; color: var(--muted); background: var(--card);
+  font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
+  box-shadow: 0 1px 3px rgba(25, 25, 25, 0.1); transition: all 0.14s ease;
+}
+.palette-swatch-remove:hover, .palette-swatch-remove:focus-visible {
+  color: var(--red); border-color: var(--red); transform: scale(1.12); outline: none;
+}
+.palette-drag-hint { margin: -2px 0 9px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.palette-drag-preview {
+  position: fixed; left: -1000px; top: -1000px; width: 36px; height: 36px;
+  border: 3px solid var(--primary); border-radius: 9px; box-shadow: 0 8px 18px rgba(25, 25, 25, 0.22);
+  pointer-events: none;
+}
+.palette-grid.is-dragging { cursor: grabbing; }
+@keyframes palette-drop-pulse {
+  0%, 100% { opacity: 0.55; transform: scaleY(0.88); }
+  50% { opacity: 1; transform: scaleY(1); }
+}
 .palette-empty { grid-column: 1 / -1; color: var(--muted); font-size: 12px; padding: 8px 0; }
 .color-row { display: flex; gap: 8px; align-items: center; }
 .palette-actions { display: flex; gap: 6px; margin-top: 8px; }

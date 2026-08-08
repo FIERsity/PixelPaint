@@ -154,6 +154,9 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const [paletteImportTarget, setPaletteImportTarget] = useState(customPalettes[0]?.id ?? "");
   const [paletteImportColors, setPaletteImportColors] = useState<string[]>([]);
   const [draggedColorIndex, setDraggedColorIndex] = useState<number | null>(null);
+  const [dragOverColorIndex, setDragOverColorIndex] = useState<number | null>(null);
+  const [dragOverPosition, setDragOverPosition] = useState<"before" | "after" | null>(null);
+  const dragPreviewRef = useRef<HTMLDivElement | null>(null);
   const previousPaletteId = useRef(palette.id);
   const [zoom, setZoom] = useState(8);
   const [showGrid, setShowGrid] = useState(true);
@@ -181,6 +184,10 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       setColorText(palette.colors[0]);
     }
   }, [palette.id, paletteDisplayName, palette.colors]);
+
+  useEffect(() => () => {
+    dragPreviewRef.current?.remove();
+  }, []);
 
   const commitCustomPalette = (next: Palette, palettes = customPalettes.map((item) => item.id === next.id ? next : item)) => {
     onCustomPalettesChange(palettes);
@@ -249,12 +256,61 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     commitCustomPalette({ ...palette, colors: palette.colors.filter((_, i) => i !== index) });
   };
 
-  const movePaletteColor = (from: number, to: number) => {
-    if (!paletteEditable || to < 0 || to >= palette.colors.length) return;
+  const reorderPaletteColor = (from: number, target: number, position: "before" | "after") => {
+    if (!paletteEditable || from < 0 || from >= palette.colors.length || target < 0 || target >= palette.colors.length || from === target) return;
     const colors = [...palette.colors];
     const [moved] = colors.splice(from, 1);
-    colors.splice(to, 0, moved);
+    let insertAt = position === "after" ? target + 1 : target;
+    if (from < insertAt) insertAt -= 1;
+    if (insertAt === from) return;
+    colors.splice(Math.max(0, Math.min(insertAt, colors.length)), 0, moved);
     commitCustomPalette({ ...palette, colors });
+  };
+
+  const clearPaletteDrag = () => {
+    dragPreviewRef.current?.remove();
+    dragPreviewRef.current = null;
+    setDraggedColorIndex(null);
+    setDragOverColorIndex(null);
+    setDragOverPosition(null);
+  };
+
+  const startPaletteDrag = (e: React.DragEvent<HTMLButtonElement>, index: number, value: string) => {
+    if (!paletteEditable) return;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", value);
+    setDraggedColorIndex(index);
+    setDragOverColorIndex(null);
+    setDragOverPosition(null);
+
+    const preview = document.createElement("div");
+    preview.className = "palette-drag-preview";
+    preview.style.background = value;
+    document.body.appendChild(preview);
+    dragPreviewRef.current = preview;
+    e.dataTransfer.setDragImage(preview, 18, 18);
+  };
+
+  const updatePaletteDropTarget = (e: React.DragEvent<HTMLDivElement>, index: number) => {
+    if (!paletteEditable || draggedColorIndex === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    const rect = e.currentTarget.getBoundingClientRect();
+    const position = e.clientX < rect.left + rect.width / 2 ? "before" : "after";
+    setDragOverColorIndex(index);
+    setDragOverPosition(position);
+  };
+
+  const dropPaletteColor = (e: React.DragEvent<HTMLDivElement>, index: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (draggedColorIndex !== null && draggedColorIndex !== index) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const position = e.clientX < rect.left + rect.width / 2 ? "before" : "after";
+      reorderPaletteColor(draggedColorIndex, index, position);
+    }
+    clearPaletteDrag();
   };
 
   const openPaletteImport = () => {
@@ -1087,39 +1143,58 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
               <button type="button" className="btn-ghost" onClick={copyPaletteToCustom}>{t("paletteCopyToCustom")}</button>
             </div>
           )}
-          <div className="palette-grid">
+          <div
+            className={`palette-grid ${draggedColorIndex !== null ? "is-dragging" : ""}`}
+            onDragOver={(e) => {
+              if (draggedColorIndex === null || e.target !== e.currentTarget) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              setDragOverColorIndex(null);
+              setDragOverPosition("after");
+            }}
+            onDrop={(e) => {
+              if (e.target !== e.currentTarget) return;
+              e.preventDefault();
+              if (draggedColorIndex !== null && palette.colors.length > 0) {
+                reorderPaletteColor(draggedColorIndex, palette.colors.length - 1, "after");
+              }
+              clearPaletteDrag();
+            }}
+          >
             {palette.colors.length === 0 && <p className="palette-empty">{t("paletteEmpty")}</p>}
             {palette.colors.map((c, index) => (
               <div
                 key={`${c}-${index}`}
-                className="palette-swatch-item"
-                draggable={paletteEditable}
-                onDragStart={() => setDraggedColorIndex(index)}
-                onDragOver={(e) => { if (paletteEditable) e.preventDefault(); }}
-                onDrop={() => {
-                  if (draggedColorIndex !== null && draggedColorIndex !== index) movePaletteColor(draggedColorIndex, index);
-                  setDraggedColorIndex(null);
+                className={`palette-swatch-item ${draggedColorIndex === index ? "is-dragging" : ""} ${dragOverColorIndex === index && draggedColorIndex !== index ? `drop-${dragOverPosition}` : ""}`}
+                onDragOver={(e) => updatePaletteDropTarget(e, index)}
+                onDragLeave={(e) => {
+                  const related = e.relatedTarget as Node | null;
+                  if (related && e.currentTarget.contains(related)) return;
+                  if (dragOverColorIndex === index) {
+                    setDragOverColorIndex(null);
+                    setDragOverPosition(null);
+                  }
                 }}
-                onDragEnd={() => setDraggedColorIndex(null)}
+                onDrop={(e) => dropPaletteColor(e, index)}
               >
                 <button
                   type="button"
                   className={`swatch ${color.toLowerCase() === c.toLowerCase() ? "active" : ""}`}
                   style={{ background: c }}
                   onClick={() => { setColor(c); setColorText(c); }}
+                  draggable={paletteEditable}
+                  onDragStart={(e) => startPaletteDrag(e, index, c)}
+                  onDragEnd={clearPaletteDrag}
                   title={c}
                   aria-label={t("color", { value: c })}
                 />
                 {paletteEditable && (
-                  <div className="palette-swatch-actions">
-                    <button type="button" className="palette-swatch-action" onClick={() => movePaletteColor(index, index - 1)} disabled={index === 0} title={t("moveColorLeft")} aria-label={t("moveColorLeft")}>‹</button>
-                    <button type="button" className="palette-swatch-action" onClick={() => movePaletteColor(index, index + 1)} disabled={index === palette.colors.length - 1} title={t("moveColorRight")} aria-label={t("moveColorRight")}>›</button>
-                    <button type="button" className="palette-swatch-action danger" onClick={() => removePaletteColor(index)} title={t("removeColor")} aria-label={`${t("removeColor")} ${c}`}>×</button>
-                  </div>
+                  <button type="button" className="palette-swatch-remove" onClick={() => removePaletteColor(index)} title={t("removeColor")} aria-label={`${t("removeColor")} ${c}`}>×</button>
                 )}
               </div>
             ))}
           </div>
+          {paletteEditable && palette.colors.length > 1 && <p className="palette-drag-hint">{t("paletteDragHint")}</p>}
           <div className="color-row">
             <input
               type="color"
