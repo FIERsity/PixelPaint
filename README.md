@@ -1,5 +1,7 @@
 # PixelPaint
 
+<p><img src="public/favicon.svg" alt="PixelPaint logo" width="72" /></p>
+
 本地优先的像素画工作站：画板、图片像素化和背景处理。图片在浏览器中处理，不上传服务器。
 
 在线使用：https://FIERsity.github.io/PixelPaint/

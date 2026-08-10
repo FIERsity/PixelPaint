@@ -68,13 +68,15 @@ const TABS: Array<{ id: Tab; labelKey: string }> = [
 
 function BrandIcon() {
   return (
-    <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
-      <rect x="2" y="2" width="28" height="28" rx="6" fill="currentColor" />
-      <rect x="6" y="6" width="5" height="5" fill="#fff" />
-      <rect x="13" y="6" width="5" height="5" fill="#fff" opacity="0.85" />
-      <rect x="6" y="13" width="5" height="5" fill="#fff" opacity="0.7" />
-      <rect x="20" y="11" width="5" height="12" rx="1.5" fill="#fff" opacity="0.9" />
-      <rect x="19" y="23" width="7" height="3" rx="1" fill="#fff" opacity="0.75" />
+    <svg viewBox="0 0 220 220" width="28" height="28" aria-hidden="true">
+      <g fill="#7C3AED">
+        <rect x="28" y="28" width="30" height="30" /><rect x="66" y="28" width="30" height="30" /><rect x="104" y="28" width="30" height="30" /><rect x="142" y="28" width="30" height="30" />
+        <rect x="28" y="66" width="30" height="30" /><rect x="66" y="66" width="30" height="30" /><rect x="104" y="66" width="30" height="30" /><rect x="142" y="66" width="30" height="30" />
+        <rect x="28" y="104" width="30" height="30" /><rect x="66" y="104" width="30" height="30" /><rect x="142" y="104" width="30" height="30" />
+        <rect x="28" y="142" width="30" height="30" /><rect x="66" y="142" width="30" height="30" /><rect x="104" y="142" width="30" height="30" /><rect x="142" y="142" width="30" height="30" />
+      </g>
+      <rect x="111" y="111" width="30" height="30" fill="#DB2777" stroke="#F7F8FA" strokeWidth="6" />
+      <path d="M141 111l18-18v18z" fill="#DB2777" />
     </svg>
   );
 }
