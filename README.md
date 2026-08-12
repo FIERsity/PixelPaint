@@ -12,7 +12,8 @@
 
 - 铅笔、橡皮、取色、填充、直线，以及像素格级框选、涂选和移动
 - 多图层、撤销/重做、帧动画和洋葱皮
-- 调色板、网格、最近邻 PNG 导出
+- 调色板、网格、最近邻 PNG 和 GIF 导出
+- 将动画按横向、纵向或自定义网格导出为精灵表 PNG
 
 ### 像素化
 
@@ -51,6 +52,7 @@ npm run build
 PixelPaint is a local-first pixel art workstation for drawing, image pixelization, and background processing. Images stay in the browser.
 
 - Canvas editor with layers, undo/redo, grids, palettes, pixel selections, movement, and frame animation
+- Nearest-neighbor PNG and GIF export, plus horizontal, vertical, or custom-grid sprite sheet PNG export
 - Pixelization with presets, custom dimensions, extracted palettes, and dithering
 - Pixel-specific background processing with border-color learning, OKLab distance, and connected regions
 - Connected or global processing scope with adjustable color tolerance

@@ -544,6 +544,9 @@ html[lang="en"] .project-hint { font-size: 11px !important; line-height: 1.5; }
 .canvas-size-preset { width: 100%; margin-bottom: 10px; }
 .canvas-custom-size-row { margin-bottom: 10px !important; }
 .export-actions { flex-wrap: wrap; }
+.sprite-sheet-options { flex-wrap: wrap; }
+.sprite-sheet-options > select { flex: 1; min-width: 96px; }
+.sprite-sheet-options > input { width: 64px; }
 .canvas-resize-actions { flex-wrap: wrap; }
 .canvas-resize-actions > .btn-ghost { white-space: nowrap; }
 .canvas-tools-card .size-row { margin-bottom: 12px; }

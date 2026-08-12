@@ -33,6 +33,11 @@ import type { PxlKitData } from "../lib/pixelTypes";
 import { checkerStyle } from "../lib/checker";
 import { useI18n } from "../lib/i18n";
 import { encodeGif } from "../lib/gif";
+import {
+  planSpriteSheet,
+  SpriteSheetError,
+  type SpriteSheetLayout,
+} from "../lib/spriteSheet";
 import { analyzePixelArt } from "../lib/pixelArt";
 import { matchSquareSizePreset, SIZE_PRESET_VALUES, type SizePreset } from "../lib/sizePresets";
 import {
@@ -312,6 +317,10 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const [sizeH, setSizeH] = useState(doc.height);
   const [canvasSizePreset, setCanvasSizePreset] = useState<SizePreset>(() => matchSquareSizePreset(doc.width, doc.height));
   const [exportScale, setExportScale] = useState(4);
+  const [spriteSheetLayout, setSpriteSheetLayout] = useState<SpriteSheetLayout>("horizontal");
+  const [spriteSheetColumns, setSpriteSheetColumns] = useState(4);
+  const [spriteSheetExportBusy, setSpriteSheetExportBusy] = useState(false);
+  const spriteSheetExportBusyRef = useRef(false);
   const [imageImportBusy, setImageImportBusy] = useState(false);
   const [mobileDrawer, setMobileDrawer] = useState<"tools" | "palette" | null>(null);
   const [recentColors, setRecentColors] = useState<string[]>(() => palette.colors.slice(0, 6));
@@ -413,6 +422,9 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     } else if (previous <= 1 && count > 1) {
       setFramesExpanded(true);
     }
+    setSpriteSheetColumns((columns) => (
+      previous <= 1 && count > 1 ? Math.min(4, count) : Math.min(columns, count)
+    ));
     previousFrameCountRef.current = count;
   }, [animation?.frames.length]);
 
@@ -1719,6 +1731,77 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     }
   }, [animation, onNotice, t]);
 
+  const exportSpriteSheet = useCallback(async () => {
+    if (!animation || animation.frames.length < 2) {
+      onNotice?.(t("spriteSheetNeedsFrames"));
+      return;
+    }
+    if (moveSessionRef.current) {
+      onNotice?.(t("moveFinishFirst"));
+      return;
+    }
+    if (spriteSheetExportBusyRef.current) return;
+
+    spriteSheetExportBusyRef.current = true;
+    setSpriteSheetExportBusy(true);
+    const columns = Math.max(1, Math.min(spriteSheetColumns, animation.frames.length));
+    const options = { layout: spriteSheetLayout, columns, scale: exportScale };
+    try {
+      const plan = planSpriteSheet(animation.frames, options);
+      const canvas = document.createElement("canvas");
+      canvas.width = plan.width;
+      canvas.height = plan.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Could not create sprite sheet canvas");
+      ctx.imageSmoothingEnabled = false;
+
+      const frameCanvas = document.createElement("canvas");
+      const frameCtx = frameCanvas.getContext("2d");
+      if (!frameCtx) throw new Error("Could not create sprite frame canvas");
+      animation.frames.forEach((frame, frameIndex) => {
+        frameCanvas.width = frame.width;
+        frameCanvas.height = frame.height;
+        frameCtx.putImageData(new ImageData(composite(frame).slice(), frame.width, frame.height), 0, 0);
+        const cellX = frameIndex % plan.columns;
+        const cellY = Math.floor(frameIndex / plan.columns);
+        ctx.drawImage(
+          frameCanvas,
+          cellX * plan.cellWidth * plan.scale,
+          cellY * plan.cellHeight * plan.scale,
+          frame.width * plan.scale,
+          frame.height * plan.scale,
+        );
+      });
+
+      const filename = `pixelpaint-sprite-sheet-${plan.cellWidth}x${plan.cellHeight}-${plan.columns}x${plan.rows}@${plan.scale}x.png`;
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) throw new Error("Could not encode sprite sheet PNG");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      onNotice?.(t("spriteSheetExported", {
+        count: animation.frames.length,
+        columns: plan.columns,
+        rows: plan.rows,
+        width: plan.width,
+        height: plan.height,
+      }));
+    } catch (error) {
+      console.error("[PixelPaint] Sprite sheet export failed:", error);
+      if (error instanceof SpriteSheetError && error.code === "too-large") {
+        onNotice?.(t("spriteSheetTooLarge", { width: error.width ?? 0, height: error.height ?? 0 }));
+      } else {
+        onNotice?.(t("spriteSheetExportError"));
+      }
+    } finally {
+      spriteSheetExportBusyRef.current = false;
+      setSpriteSheetExportBusy(false);
+    }
+  }, [animation, exportScale, onNotice, spriteSheetColumns, spriteSheetLayout, t]);
+
   const saveProject = useCallback(() => {
     onSaveProject?.();
   }, [onSaveProject]);
@@ -2050,7 +2133,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
                 )}
               </div>
             </div>
-            <p className="frame-gif-hint">{animation.frames.length < 2 ? t("gifNeedsFrames") : t("frameGifReady")}</p>
+            <p className="frame-gif-hint">{animation.frames.length < 2 ? t("animationExportNeedsFrames") : t("frameExportReady")}</p>
             </>}
           </div>
         )}
@@ -2350,6 +2433,47 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
               title={animation && animation.frames.length >= 2 ? t("exportGif") : t("gifNeedsFrames")}
             >
               {t("exportGif")}
+            </button>
+          </div>
+          <div className="size-row sprite-sheet-options">
+            <label className="field-label" style={{ margin: 0 }} htmlFor="sprite-sheet-layout">{t("spriteSheetLayout")}</label>
+            <select
+              id="sprite-sheet-layout"
+              className="num-input"
+              value={spriteSheetLayout}
+              onChange={(event) => setSpriteSheetLayout(event.target.value as SpriteSheetLayout)}
+              disabled={spriteSheetExportBusy}
+            >
+              <option value="horizontal">{t("spriteSheetHorizontal")}</option>
+              <option value="vertical">{t("spriteSheetVertical")}</option>
+              <option value="grid">{t("spriteSheetGrid")}</option>
+            </select>
+            {spriteSheetLayout === "grid" && (
+              <>
+                <label className="field-label" style={{ margin: 0 }} htmlFor="sprite-sheet-columns">{t("spriteSheetColumns")}</label>
+                <input
+                  id="sprite-sheet-columns"
+                  className="num-input"
+                  type="number"
+                  min={1}
+                  max={animation?.frames.length ?? 1}
+                  value={spriteSheetColumns}
+                  onChange={(event) => setSpriteSheetColumns(Math.max(1, Math.round(Number(event.target.value) || 1)))}
+                  disabled={spriteSheetExportBusy}
+                />
+              </>
+            )}
+          </div>
+          <div className="size-row export-actions">
+            <button
+              type="button"
+              className="btn-ghost"
+              style={{ flex: 1 }}
+              onClick={() => void exportSpriteSheet()}
+              disabled={!animation || animation.frames.length < 2 || spriteSheetExportBusy}
+              title={animation && animation.frames.length >= 2 ? t("exportSpriteSheet") : t("spriteSheetNeedsFrames")}
+            >
+              {spriteSheetExportBusy ? t("spriteSheetExporting") : t("exportSpriteSheet")}
             </button>
           </div>
           <div className="size-row import-actions">
