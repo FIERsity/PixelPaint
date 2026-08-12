@@ -36,7 +36,7 @@ export default function ResultPreview({ operation, result, backgroundUrl, busy, 
     const image = ctx.createImageData(result.w, result.h);
     image.data.set(result.pixels);
     ctx.putImageData(image, 0, 0);
-  }, [result]);
+  }, [operation, result]);
 
   const updateImageScale = () => {
     const image = imageRef.current;

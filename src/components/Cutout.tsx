@@ -8,6 +8,7 @@ import {
 } from "../lib/cutout";
 import { useI18n } from "../lib/i18n";
 import type { CanvasImportRequest } from "../lib/importFlow";
+import { isCurrentAsyncRun } from "../lib/asyncGuards";
 
 interface CutoutProps {
   inputFile: File | null;
@@ -40,6 +41,8 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
   const previousInputRef = useRef<File | null>(inputFile);
   const runningRef = useRef(false);
   const runIdRef = useRef(0);
+  const mountedRef = useRef(true);
+  const signatureRef = useRef("");
 
   useEffect(() => {
     if (previousInputRef.current === inputFile) return;
@@ -62,15 +65,26 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
     threshold: method === "ai" && edgeMode === "hard" ? threshold : undefined,
   }), [edgeMode, inputVersion, method, model, scope, threshold, tolerance]);
   const resultFresh = Boolean(resultFile && resultSignature === signature);
+  signatureRef.current = signature;
 
   useEffect(() => onFreshnessChange?.(resultFresh), [onFreshnessChange, resultFresh]);
 
   useEffect(() => {
-    if (!inputFile) return;
     runIdRef.current += 1;
     runningRef.current = false;
-    if (resultFile && resultSignature !== signature) setPhase("ready");
-  }, [inputFile, resultFile, resultSignature, signature]);
+    setProgress(null);
+    setError(null);
+    setPhase(inputFile ? "ready" : "idle");
+  }, [inputFile, signature]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      runIdRef.current += 1;
+      runningRef.current = false;
+    };
+  }, []);
 
   const run = useCallback(async () => {
     if (!inputFile || runningRef.current) return;
@@ -86,7 +100,7 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
       if (method === "pixel") {
         setProgress({ label: t("samplingBackground"), pct: 12 });
         const pixelResult = await removePixelBackgroundBlob(inputFile, { scope, tolerance });
-        if (runId !== runIdRef.current) return;
+        if (!isCurrentAsyncRun(runId, runIdRef.current, mountedRef.current)) return;
         setProgress({ label: t("cleanEdges"), pct: 99 });
         normalized = pixelResult.blob;
       } else {
@@ -96,7 +110,7 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
           model,
           output: { format: "image/png" },
           progress: (key, current, total) => {
-            if (runId !== runIdRef.current) return;
+            if (!isCurrentAsyncRun(runId, runIdRef.current, mountedRef.current)) return;
             let label = t("processing");
             if (key.includes("fetch")) label = t("downloadingModel");
             else if (key.includes("compute")) label = t("processingBackground");
@@ -104,11 +118,11 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
             setProgress({ label, pct: Math.max(1, Math.min(99, pct)) });
           },
         });
-        if (runId !== runIdRef.current) return;
+        if (!isCurrentAsyncRun(runId, runIdRef.current, mountedRef.current)) return;
         setProgress({ label: t("cleanEdges"), pct: 99 });
         normalized = await normalizeCutoutBlob(inputFile, blob, { mode: edgeMode, threshold });
       }
-      if (runId !== runIdRef.current) return;
+      if (!isCurrentAsyncRun(runId, runIdRef.current, mountedRef.current)) return;
       const base = inputFile.name.replace(/\.[^.]+$/, "") || "pixelpaint";
       const file = new File([normalized], base + "-background.png", { type: "image/png" });
       onResult(file);
@@ -119,12 +133,12 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
         ? t("pixelBackgroundDone", { scope: scope === "connected" ? t("connectedBackgroundShort") : t("globalBackgroundShort") })
         : t("backgroundDone", { mode: edgeMode === "hard" ? t("hardEdgeShort") : t("softEdgeShort") }));
     } catch (err) {
-      if (runId !== runIdRef.current) return;
+      if (!isCurrentAsyncRun(runId, runIdRef.current, mountedRef.current)) return;
       console.error(err);
       setError(t("backgroundError"));
       setPhase("error");
     } finally {
-      if (runId === runIdRef.current) runningRef.current = false;
+      if (mountedRef.current && runId === runIdRef.current) runningRef.current = false;
     }
   }, [edgeMode, inputFile, method, model, onNotice, onResult, scope, signature, t, threshold, tolerance]);
 
@@ -136,16 +150,19 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
 
   const sendToCanvas = async () => {
     if (!resultFile || !resultFresh) return;
+    const sendSignature = signature;
+    let bitmap: ImageBitmap | null = null;
     try {
-      const bitmap = await createImageBitmap(resultFile);
+      bitmap = await createImageBitmap(resultFile);
+      if (!mountedRef.current || signatureRef.current !== sendSignature) return;
       const canvas = document.createElement("canvas");
       canvas.width = bitmap.width;
       canvas.height = bitmap.height;
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error(t("resultCanvasError"));
       ctx.drawImage(bitmap, 0, 0);
-      bitmap.close();
       const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      if (!mountedRef.current || signatureRef.current !== sendSignature) return;
       void onImport({
         doc: docFromPixels(image.data, image.width, image.height, t("background")),
         source: "background",
@@ -153,7 +170,9 @@ export default function Cutout({ inputFile, resultFile, onResult, onImport, onNo
         extractedColors,
       });
     } catch {
-      setError(t("sendBackgroundError"));
+      if (mountedRef.current && signatureRef.current === sendSignature) setError(t("sendBackgroundError"));
+    } finally {
+      bitmap?.close();
     }
   };
 

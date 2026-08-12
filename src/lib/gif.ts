@@ -215,6 +215,11 @@ export function encodeGif(frames: GifFrame[], fps: number): Uint8Array {
   writer.push(0xf7, 0, 0); // global table, 256 colors, 8-bit color resolution
   for (const value of palette.palette) writer.push(value);
 
+  // Netscape application extension: 0 means repeat forever.
+  writer.push(0x21, 0xff, 0x0b);
+  for (const char of "NETSCAPE2.0") writer.push(char.charCodeAt(0));
+  writer.push(0x03, 0x01, 0x00, 0x00, 0x00);
+
   const delay = Math.min(65535, Math.max(1, Math.round(100 / Math.max(1, fps))));
   for (const frame of frames) {
     const indices = frameIndices(frame, width, height, palette);

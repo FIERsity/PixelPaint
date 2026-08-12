@@ -63,3 +63,16 @@ export function resizeFrames(anim: PixelAnim, width: number, height: number): Pi
 export function clampIndex(index: number, length: number): number {
   return Math.max(0, Math.min(index, length - 1));
 }
+
+export function adjacentOnionFrames(
+  frames: PixelDoc[],
+  index: number,
+  enabled: boolean,
+  includeNext: boolean,
+): { previous: PixelDoc | null; next: PixelDoc | null } {
+  if (!enabled) return { previous: null, next: null };
+  return {
+    previous: frames[index - 1] ?? null,
+    next: includeNext ? frames[index + 1] ?? null : null,
+  };
+}

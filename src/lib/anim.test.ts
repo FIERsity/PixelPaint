@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  addFrame, clampIndex, createAnim, deleteFrame, moveFrame, resizeFrames,
+  addFrame, adjacentOnionFrames, clampIndex, createAnim, deleteFrame, moveFrame, resizeFrames,
 } from "./anim";
 import { putPixel } from "./pixelDoc";
 
@@ -69,5 +69,16 @@ describe("anim 帧操作", () => {
     expect(clampIndex(-1, 3)).toBe(0);
     expect(clampIndex(5, 3)).toBe(2);
     expect(clampIndex(1, 3)).toBe(1);
+  });
+
+  it("洋葱皮按设置分别选择前后相邻帧", () => {
+    let anim = createAnim(2, 2);
+    anim = addFrame(anim, "blank");
+    anim = addFrame(anim, "blank");
+    expect(adjacentOnionFrames(anim.frames, 1, true, false)).toEqual({ previous: anim.frames[0], next: null });
+    expect(adjacentOnionFrames(anim.frames, 1, true, true)).toEqual({ previous: anim.frames[0], next: anim.frames[2] });
+    expect(adjacentOnionFrames(anim.frames, 0, true, true)).toEqual({ previous: null, next: anim.frames[1] });
+    expect(adjacentOnionFrames(anim.frames, 2, true, true)).toEqual({ previous: anim.frames[1], next: null });
+    expect(adjacentOnionFrames(anim.frames, 1, false, true)).toEqual({ previous: null, next: null });
   });
 });

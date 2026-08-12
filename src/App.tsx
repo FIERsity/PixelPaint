@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import Editor from "./components/Editor";
 import Convert from "./components/Convert";
 import {
-  addFrame, clampIndex, createAnim, deleteFrame, moveFrame, resizeFrames, type PixelAnim,
+  addFrame, adjacentOnionFrames, clampIndex, createAnim, deleteFrame, moveFrame, resizeFrames, type PixelAnim,
 } from "./lib/anim";
 import { composite, type PixelDoc } from "./lib/pixelDoc";
 import { CUSTOM_PALETTE, type Palette } from "./lib/palette";
@@ -304,13 +304,13 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [playing, frames.length, anim.fps]);
 
-  // 洋葱皮：上一帧（或下一帧）的合成图
-  const onionPixels = useMemo(() => {
-    if (!onion) return null;
-    const prev = frames[frameIndex - 1];
-    const next = frames[frameIndex + 1];
-    const target = prev ?? (onionNext ? next : null);
-    return target ? composite(target) : null;
+  // 洋葱皮：上一帧默认显示；启用下一帧时可同时显示前后相邻帧。
+  const onionFrames = useMemo(() => {
+    const adjacent = adjacentOnionFrames(frames, frameIndex, onion, onionNext);
+    return {
+      previous: adjacent.previous ? composite(adjacent.previous) : null,
+      next: adjacent.next ? composite(adjacent.next) : null,
+    };
   }, [onion, onionNext, frames, frameIndex]);
 
   // 启动时恢复本地草稿
@@ -532,7 +532,8 @@ export default function App() {
               onNotice={showNotice}
               onConfirm={askConfirm}
               epoch={epoch}
-              onionPixels={onionPixels}
+              onionPreviousPixels={onionFrames.previous}
+              onionNextPixels={onionFrames.next}
               onSaveProject={saveProject}
               onOpenProject={openProject}
               onSendImageToPixelize={offerImageToPixelize}

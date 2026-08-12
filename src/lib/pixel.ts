@@ -1,6 +1,6 @@
 // ============================================================
 // PixelPaint · 像素化核心算法
-// 流程：降采样 → 颜色量化(median-cut) → 抖动 → 输出 RGBA
+// 流程：降采样 → 颜色量化（加权聚类或固定调色板）→ 抖动 → 输出 RGBA
 // 所有函数均为纯计算，可在 Worker 中运行。
 // ============================================================
 
@@ -45,17 +45,33 @@ export function downsample(
       const i11 = (y1 * srcW + x1) * 4;
 
       const oi = (y * outW + x) * 4;
-      for (let c = 0; c < 4; c++) {
-        const top = src[i00 + c] * (1 - fx) + src[i10 + c] * fx;
-        const bot = src[i01 + c] * (1 - fx) + src[i11 + c] * fx;
-        out[oi + c] = top * (1 - fy) + bot * fy;
+      const interpolate = (v00: number, v10: number, v01: number, v11: number) => {
+        const top = v00 * (1 - fx) + v10 * fx;
+        const bottom = v01 * (1 - fx) + v11 * fx;
+        return top * (1 - fy) + bottom * fy;
+      };
+      const alpha = interpolate(src[i00 + 3], src[i10 + 3], src[i01 + 3], src[i11 + 3]);
+      out[oi + 3] = alpha;
+      if (alpha <= 0) {
+        out[oi] = 0; out[oi + 1] = 0; out[oi + 2] = 0;
+        continue;
+      }
+      // 透明像素的 RGB 没有语义。先预乘 alpha 再插值，避免透明区的隐藏 RGB 污染边缘。
+      for (let c = 0; c < 3; c++) {
+        const premultiplied = interpolate(
+          src[i00 + c] * src[i00 + 3] / 255,
+          src[i10 + c] * src[i10 + 3] / 255,
+          src[i01 + c] * src[i01 + 3] / 255,
+          src[i11 + c] * src[i11 + 3] / 255,
+        );
+        out[oi + c] = premultiplied * 255 / alpha;
       }
     }
   }
   return out;
 }
 
-// ---------- 中值切分 (median cut) 颜色量化 ----------
+// ---------- 加权颜色聚类量化 ----------
 export function quantize(
   pixels: Uint8ClampedArray,
   maxColors: number,
@@ -214,6 +230,9 @@ export function dither(
   if (mode === "none") return pixels;
   const out = pixels.slice();
   const work = pixels.slice(); // 工作副本，带误差累积
+  const bayer = mode === "bayer2" ? makeBayerMatrix(2)
+    : mode === "bayer4" ? makeBayerMatrix(4)
+      : null;
   const inBounds = (x: number, y: number) => x >= 0 && y >= 0 && x < width && y < height;
 
   const setErr = (x: number, y: number, er: number, eg: number, eb: number, factor: number) => {
@@ -229,6 +248,16 @@ export function dither(
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 4;
       if (work[i + 3] === 0) continue;
+      if (bayer) {
+        // 有序抖动先按像素位置偏移原色，再映射回调色板；输出始终是调色板成员。
+        const n = bayer.length;
+        const threshold = (bayer[y % n][x % n] + 0.5) / (n * n) - 0.5;
+        const adjust = (value: number) => Math.max(0, Math.min(255, value + threshold * 255));
+        const [nr, ng, nb] = quantizeColor(adjust(work[i]), adjust(work[i + 1]), adjust(work[i + 2]));
+        out[i] = nr; out[i + 1] = ng; out[i + 2] = nb;
+        continue;
+      }
+
       const [nr, ng, nb] = quantizeColor(work[i], work[i + 1], work[i + 2]);
       const er = work[i] - nr;
       const eg = work[i + 1] - ng;
@@ -246,16 +275,6 @@ export function dither(
         for (const [dx, dy] of [[1, 0], [2, 0], [-1, 1], [0, 1], [1, 1], [0, 2]] as const) {
           setErr(x + dx, y + dy, er, eg, eb, 1 / 8);
         }
-      } else {
-        // Bayer 有序抖动（模式为 bayer2 / bayer4）
-        const n = mode === "bayer2" ? 2 : 4;
-        const bayer = makeBayerMatrix(n);
-        const threshold = bayer[y % n][x % n] / (n * n) - 0.5;
-        const qc = (v: number, old: number) => (old + threshold * 255 < v ? Math.min(255, v + 128) : Math.max(0, v - 128));
-        const qr = Math.max(0, Math.min(255, Math.round(qc(work[i], nr))));
-        const qg = Math.max(0, Math.min(255, Math.round(qc(work[i + 1], ng))));
-        const qb = Math.max(0, Math.min(255, Math.round(qc(work[i + 2], nb))));
-        out[i] = qr; out[i + 1] = qg; out[i + 2] = qb;
       }
     }
   }

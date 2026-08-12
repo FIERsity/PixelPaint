@@ -27,6 +27,16 @@ describe("downsample", () => {
     expect(out).toHaveLength(64);
     expect(out[3]).toBe(255);
   });
+
+  it("使用预乘 alpha 插值，不让透明像素的隐藏 RGB 污染边缘", () => {
+    const src = new Uint8ClampedArray([
+      255, 0, 0, 255,
+      0, 0, 255, 0,
+    ]);
+    const out = downsample(src, 2, 1, 4, 1);
+    expect([out[4], out[5], out[6], out[7]]).toEqual([255, 0, 0, 128]);
+    expect([out[12], out[13], out[14], out[15]]).toEqual([0, 0, 0, 0]);
+  });
 });
 
 describe("quantize", () => {
@@ -129,6 +139,31 @@ describe("imageToPixels", () => {
         outWidth: 4, outHeight: 4, maxColors: 4, palette: null, dither,
       });
       expect(pixels, `dither=${dither}`).toHaveLength(4 * 4 * 4);
+    }
+  });
+
+  it.each(["bayer2", "bayer4"] as const)("%s 固定调色板输出仍全部属于该调色板", (dither) => {
+    const values = [32, 96, 160, 224];
+    const src = new Uint8ClampedArray(values.length * 4);
+    values.forEach((value, index) => src.set([value, value, value, 255], index * 4));
+    const { pixels } = imageToPixels(src, 4, 1, {
+      outWidth: 4, outHeight: 1, maxColors: 16, palette: ["#000000", "#ffffff"], dither,
+    });
+    const colors = new Set<string>();
+    for (let i = 0; i < pixels.length; i += 4) colors.add(`${pixels[i]},${pixels[i + 1]},${pixels[i + 2]}`);
+    expect([...colors].every((color) => color === "0,0,0" || color === "255,255,255")).toBe(true);
+    expect(colors.size).toBe(2);
+  });
+
+  it("Bayer 自动调色板输出仍全部属于返回调色板", () => {
+    const src = new Uint8ClampedArray(16 * 4);
+    for (let i = 0; i < 16; i++) src.set([i * 16, 80, 255 - i * 16, 255], i * 4);
+    const { pixels, palette } = imageToPixels(src, 16, 1, {
+      outWidth: 16, outHeight: 1, maxColors: 4, palette: null, dither: "bayer4",
+    });
+    const allowed = new Set(palette.map((color) => color.join(",")));
+    for (let i = 0; i < pixels.length; i += 4) {
+      expect(allowed.has(`${pixels[i]},${pixels[i + 1]},${pixels[i + 2]}`)).toBe(true);
     }
   });
 

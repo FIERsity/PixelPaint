@@ -10,6 +10,7 @@ import { pixelsToPngFile } from "../lib/imageTransfer";
 import { useI18n } from "../lib/i18n";
 import { SIZE_PRESET_VALUES, type SizePreset } from "../lib/sizePresets";
 import type { CanvasImportRequest } from "../lib/importFlow";
+import { isCurrentConversionResponse } from "../lib/asyncGuards";
 
 interface ConvertProps {
   onImport: (request: CanvasImportRequest) => void | Promise<void>;
@@ -58,12 +59,17 @@ export default function Convert({ onImport, onNotice, externalFile }: ConvertPro
   const workerRef = useRef<Worker | null>(null);
   const reqId = useRef(0);
   // 每个请求自带尺寸，避免用“最新参数”错配旧结果导致崩溃/花屏。
-  const pending = useRef(new Map<number, { w: number; h: number; auto: boolean }>());
+  const pending = useRef(new Map<number, { generation: number; w: number; h: number; auto: boolean }>());
+  const inputGenerationRef = useRef(0);
+  const loadIdRef = useRef(0);
+  const backgroundPreparationIdRef = useRef(0);
   const sourceRef = useRef<Source | null>(null);
+  const tRef = useRef(t);
   const backgroundUrlRef = useRef<string | null>(null);
   const optsRef = useRef<ToPixelOptions | null>(null);
   const externalFileIdRef = useRef<number | null>(null);
   sourceRef.current = source;
+  tRef.current = t;
 
   const replaceBackgroundResult = useCallback((file: File | null) => {
     if (backgroundUrlRef.current) URL.revokeObjectURL(backgroundUrlRef.current);
@@ -74,9 +80,18 @@ export default function Convert({ onImport, onNotice, externalFile }: ConvertPro
   }, []);
 
   const clearBackgroundState = useCallback(() => {
+    backgroundPreparationIdRef.current += 1;
+    setSending(false);
     setBackgroundInput(null);
     replaceBackgroundResult(null);
   }, [replaceBackgroundResult]);
+
+  const invalidateConversion = useCallback(() => {
+    inputGenerationRef.current += 1;
+    reqId.current += 1;
+    pending.current.clear();
+    setBusy(false);
+  }, []);
 
   const buildOpts = useCallback((): ToPixelOptions => {
     const pal = PRESET_PALETTES.find((p) => p.name === paletteName) ?? NO_PALETTE;
@@ -98,19 +113,34 @@ export default function Convert({ onImport, onNotice, externalFile }: ConvertPro
       const msg = e.data as ToPixelResponse & { error?: string };
       const request = pending.current.get(msg.id);
       pending.current.delete(msg.id);
-      if (msg.id !== reqId.current) return;
+      if (!request || !isCurrentConversionResponse(
+        { id: msg.id, generation: request.generation },
+        reqId.current,
+        inputGenerationRef.current,
+        Boolean(sourceRef.current),
+      )) return;
       if (msg.error) {
         setError(msg.error);
         setBusy(false);
         return;
       }
-      if (!request) return;
       if (request.auto && Array.isArray(msg.palette)) {
         setAutoPalette(msg.palette.map(([r, g, b]) => rgbToHex(r, g, b)));
       }
       setResult({ pixels: msg.pixels, w: request.w, h: request.h });
       setBusy(false);
     };
+    const handleWorkerFailure = () => {
+      inputGenerationRef.current += 1;
+      reqId.current += 1;
+      pending.current.clear();
+      setBusy(false);
+      setError(tRef.current("pixelizeError"));
+      worker.terminate();
+      if (workerRef.current === worker) workerRef.current = null;
+    };
+    worker.onerror = handleWorkerFailure;
+    worker.onmessageerror = handleWorkerFailure;
     workerRef.current = worker;
     return worker;
   }, []);
@@ -124,12 +154,18 @@ export default function Convert({ onImport, onNotice, externalFile }: ConvertPro
   const runConvert = useCallback(() => {
     const currentSource = sourceRef.current;
     const worker = ensureWorker();
-    if (!currentSource || !worker) return;
+    if (!currentSource) return;
+    if (!worker) {
+      setBusy(false);
+      setError(tRef.current("pixelizeError"));
+      return;
+    }
     const opts = optsRef.current;
     if (!opts) return;
     reqId.current += 1;
     const id = reqId.current;
     pending.current.set(id, {
+      generation: inputGenerationRef.current,
       w: opts.outWidth,
       h: opts.outHeight,
       auto: paletteName === NO_PALETTE.name,
@@ -142,9 +178,17 @@ export default function Convert({ onImport, onNotice, externalFile }: ConvertPro
 
   useEffect(() => {
     if (!source) return;
+    // 设置变化后立即作废旧响应和派生结果；新请求仍保留防抖。
+    inputGenerationRef.current += 1;
+    reqId.current += 1;
+    pending.current.clear();
+    setResult(null);
+    if (paletteName === NO_PALETTE.name) setAutoPalette([]);
+    clearBackgroundState();
+    setBusy(true);
     const timer = setTimeout(runConvert, 220);
     return () => clearTimeout(timer);
-  }, [source, outW, outH, maxColors, paletteName, dither, runConvert]);
+  }, [source, outW, outH, maxColors, paletteName, dither, clearBackgroundState, runConvert]);
 
   const setOutputDimensions = useCallback((width: number, height: number) => {
     const nextWidth = clampDimension(width);
@@ -156,31 +200,39 @@ export default function Convert({ onImport, onNotice, externalFile }: ConvertPro
   }, []);
 
   const loadFile = useCallback(async (file: File) => {
+    const loadId = loadIdRef.current + 1;
+    loadIdRef.current = loadId;
+    invalidateConversion();
+    setSource(null);
+    setResult(null);
+    setAutoPalette([]);
+    setOperation("pixelate");
+    clearBackgroundState();
+    setError(null);
+    let bitmap: ImageBitmap | null = null;
     try {
-      setError(null);
-      const bitmap = await createImageBitmap(file);
+      bitmap = await createImageBitmap(file);
+      if (loadId !== loadIdRef.current) return;
       const canvas = document.createElement("canvas");
       canvas.width = bitmap.width;
       canvas.height = bitmap.height;
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error(t("createCanvasError"));
       ctx.drawImage(bitmap, 0, 0);
-      bitmap.close();
       const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      if (loadId !== loadIdRef.current) return;
       const width = 32;
       const height = clampDimension(Math.round((width * image.height) / image.width));
       setSource({ data: image.data, w: image.width, h: image.height, name: file.name });
-      setResult(null);
       setOutputDimensions(width, height);
       setSizePreset("32");
-      setAutoPalette([]);
-      setOperation("pixelate");
-      clearBackgroundState();
       onNotice?.(t("readImageNotice", { name: file.name, width: image.width, height: image.height }));
     } catch {
-      setError(t("readImageError"));
+      if (loadId === loadIdRef.current) setError(t("readImageError"));
+    } finally {
+      bitmap?.close();
     }
-  }, [clearBackgroundState, onNotice, setOutputDimensions, t]);
+  }, [clearBackgroundState, invalidateConversion, onNotice, setOutputDimensions, t]);
 
   useEffect(() => {
     if (!externalFile || externalFileIdRef.current === externalFile.id) return;
@@ -252,25 +304,33 @@ export default function Convert({ onImport, onNotice, externalFile }: ConvertPro
   const enterBackground = async () => {
     setOperation("background");
     if (!result || sending) return;
+    const preparationId = backgroundPreparationIdRef.current + 1;
+    backgroundPreparationIdRef.current = preparationId;
+    const generation = inputGenerationRef.current;
     setSending(true);
     setError(null);
     try {
       const file = await pixelsToPngFile(result.pixels, result.w, result.h, "pixelpaint-converted.png");
+      if (preparationId !== backgroundPreparationIdRef.current || generation !== inputGenerationRef.current) return;
       if (!file) throw new Error(t("createPngError"));
       setBackgroundInput(file);
       replaceBackgroundResult(null);
       setBackgroundFresh(false);
       onNotice?.(t("switchToBackground"));
     } catch {
-      setError(t("prepareBackgroundError"));
+      if (preparationId === backgroundPreparationIdRef.current && generation === inputGenerationRef.current) {
+        setError(t("prepareBackgroundError"));
+      }
     } finally {
-      setSending(false);
+      if (preparationId === backgroundPreparationIdRef.current) setSending(false);
     }
   };
 
   const downloadPixelResult = useCallback(async () => {
     if (!result) return;
+    const generation = inputGenerationRef.current;
     const file = await pixelsToPngFile(result.pixels, result.w, result.h, `pixelpaint-${result.w}x${result.h}.png`);
+    if (generation !== inputGenerationRef.current || !sourceRef.current) return;
     if (!file) {
       setError(t("createPngError"));
       return;
@@ -297,7 +357,11 @@ export default function Convert({ onImport, onNotice, externalFile }: ConvertPro
             role="tab"
             aria-selected={operation === "pixelate"}
             className={`operation-tab ${operation === "pixelate" ? "active" : ""}`}
-            onClick={() => setOperation("pixelate")}
+            onClick={() => {
+              backgroundPreparationIdRef.current += 1;
+              setSending(false);
+              setOperation("pixelate");
+            }}
           >
             {t("pixelize")}
           </button>
@@ -352,6 +416,8 @@ export default function Convert({ onImport, onNotice, externalFile }: ConvertPro
                 <div className="source-actions">
                   <button type="button" className="mini-btn" onClick={() => previewInputRef.current?.click()}>{t("changeImageAction")}</button>
                   <button type="button" className="mini-btn source-clear" onClick={() => {
+                    loadIdRef.current += 1;
+                    invalidateConversion();
                     setSource(null); setResult(null); setAutoPalette([]); clearBackgroundState();
                   }}>{t("clear")}</button>
                 </div>

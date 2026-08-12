@@ -76,8 +76,9 @@ interface EditorProps {
   onCustomPalettesChange: (palettes: Palette[]) => void;
   onNotice?: (msg: string) => void;
   onConfirm: (message: string) => Promise<boolean>;
-  /** 洋葱皮：相邻帧的合成位图（非当前帧） */
-  onionPixels?: Uint8ClampedArray | null;
+  /** 洋葱皮：前后相邻帧的合成位图（非当前帧） */
+  onionPreviousPixels?: Uint8ClampedArray | null;
+  onionNextPixels?: Uint8ClampedArray | null;
   animation?: AnimationProps;
   /** 外部替换文档（导入/换帧）时自增，Editor 据此清空撤销历史 */
   epoch?: number;
@@ -249,7 +250,7 @@ function FrameThumb({ frame, active, index, onClick }: {
   );
 }
 
-export default function Editor({ doc, setDoc, palette, customPalettes, onPaletteChange, onCustomPalettesChange, onNotice, onConfirm, onionPixels, animation, epoch = 0, onSaveProject, onOpenProject, onSendImageToPixelize, onCanvasImport }: EditorProps) {
+export default function Editor({ doc, setDoc, palette, customPalettes, onPaletteChange, onCustomPalettesChange, onNotice, onConfirm, onionPreviousPixels, onionNextPixels, animation, epoch = 0, onSaveProject, onOpenProject, onSendImageToPixelize, onCanvasImport }: EditorProps) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -320,6 +321,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
   const selectionRef = useRef<Uint8Array>(createSelectionMask(doc.width, doc.height));
   const selectionGestureRef = useRef<SelectionGesture | null>(null);
   const moveSessionRef = useRef<MoveSession | null>(null);
+  const opacitySessionRef = useRef<{ layerId: string; before: PixelDoc } | null>(null);
   const activePointersRef = useRef(new Map<number, { x: number; y: number }>());
   const navigationRef = useRef(false);
   const pinchRef = useRef<{
@@ -720,6 +722,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       layerSigRef.current = "";
       selectionGestureRef.current = null;
       moveSessionRef.current = null;
+      opacitySessionRef.current = null;
       if (selectionRef.current.length !== doc.width * doc.height) {
         selectionRef.current = createSelectionMask(doc.width, doc.height);
       }
@@ -796,20 +799,26 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
 
     ctx.clearRect(0, 0, doc.width, doc.height);
 
-    // 洋葱皮：把相邻帧的合成图（着色为蓝）铺在当前帧之下
-    if (onionPixels && onionPixels.length === doc.width * doc.height * 4) {
-      const img = ctx.createImageData(doc.width, doc.height);
-      img.data.set(onionPixels);
-      for (let i = 0; i < img.data.length; i += 4) {
-        const a = img.data[i + 3];
-        if (a > 0) {
-          img.data[i] = 60;
-          img.data[i + 1] = 130;
-          img.data[i + 2] = 255;
-          img.data[i + 3] = Math.round(a * 0.38); // 半透明蓝幽灵
+    if (onionPreviousPixels || onionNextPixels) {
+      const onionImage = ctx.createImageData(doc.width, doc.height);
+      const blendOnion = (pixels: Uint8ClampedArray | null | undefined, tint: [number, number, number]) => {
+        if (!pixels || pixels.length !== onionImage.data.length) return;
+        for (let i = 0; i < pixels.length; i += 4) {
+          const sourceAlpha = pixels[i + 3] / 255 * 0.38;
+          if (sourceAlpha <= 0) continue;
+          const destAlpha = onionImage.data[i + 3] / 255;
+          const outAlpha = sourceAlpha + destAlpha * (1 - sourceAlpha);
+          onionImage.data[i] = (tint[0] * sourceAlpha + onionImage.data[i] * destAlpha * (1 - sourceAlpha)) / outAlpha;
+          onionImage.data[i + 1] = (tint[1] * sourceAlpha + onionImage.data[i + 1] * destAlpha * (1 - sourceAlpha)) / outAlpha;
+          onionImage.data[i + 2] = (tint[2] * sourceAlpha + onionImage.data[i + 2] * destAlpha * (1 - sourceAlpha)) / outAlpha;
+          onionImage.data[i + 3] = outAlpha * 255;
         }
-      }
-      ctx.putImageData(img, 0, 0);
+      };
+
+      // 上一帧为蓝色；可选的下一帧以淡青色叠加，两者始终位于当前帧之下。
+      blendOnion(onionPreviousPixels, [60, 130, 255]);
+      blendOnion(onionNextPixels, [80, 210, 220]);
+      ctx.putImageData(onionImage, 0, 0);
     }
 
     for (let i = 0; i < doc.layers.length; i++) {
@@ -824,7 +833,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
       }
     }
     ctx.globalAlpha = 1;
-  }, [doc, rebuildLayerCanvases, onionPixels]);
+  }, [doc, rebuildLayerCanvases, onionNextPixels, onionPreviousPixels]);
 
   useEffect(() => { draw(); }, [draw]);
 
@@ -1584,8 +1593,26 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
     setDoc({ ...doc, layers: doc.layers.map((l, idx) => (idx === i ? { ...l, visible: !l.visible } : l)) });
   });
 
+  const beginLayerOpacity = (i: number) => {
+    const layer = doc.layers[i];
+    if (!layer || opacitySessionRef.current?.layerId === layer.id) return;
+    opacitySessionRef.current = { layerId: layer.id, before: cloneDoc(doc) };
+  };
+
   const setLayerOpacity = (i: number, opacity: number) => {
+    beginLayerOpacity(i);
     setDoc({ ...doc, layers: doc.layers.map((l, idx) => (idx === i ? { ...l, opacity } : l)) });
+  };
+
+  const finishLayerOpacity = () => {
+    const session = opacitySessionRef.current;
+    if (!session) return;
+    opacitySessionRef.current = null;
+    const layer = doc.layers.find((item) => item.id === session.layerId);
+    const beforeLayer = session.before.layers.find((item) => item.id === session.layerId);
+    if (!layer || !beforeLayer || layer.opacity === beforeLayer.opacity) return;
+    historyRef.current.push({ kind: "doc", doc: session.before });
+    refresh();
   };
 
   const clearLayer = async () => {
@@ -1980,7 +2007,7 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
                 {t("onionSkin")}
               </label>
               <label className="ghost-check" title={t("showNextFrameHint")}>
-                <input type="checkbox" checked={animation.onionNext} onChange={animation.onToggleOnionNext} />
+                <input type="checkbox" checked={animation.onionNext} onChange={animation.onToggleOnionNext} disabled={!animation.onion} />
                 {t("showNextFrame")}
               </label>
               <label className="fps-label">
@@ -2250,7 +2277,13 @@ export default function Editor({ doc, setDoc, palette, customPalettes, onPalette
                 <span className="layer-name">{localizeLayerName(l.name)}</span>
                 <input
                   type="range" min={0} max={100} value={Math.round(l.opacity * 100)}
+                  onPointerDown={() => beginLayerOpacity(i)}
+                  onKeyDown={() => beginLayerOpacity(i)}
                   onChange={(e) => setLayerOpacity(i, Number(e.target.value) / 100)}
+                  onPointerUp={finishLayerOpacity}
+                  onPointerCancel={finishLayerOpacity}
+                  onKeyUp={finishLayerOpacity}
+                  onBlur={finishLayerOpacity}
                   onClick={(e) => e.stopPropagation()}
                   title={t("opacity", { value: Math.round(l.opacity * 100) })}
                   aria-label={`${localizeLayerName(l.name)} ${t("opacity", { value: Math.round(l.opacity * 100) })}`}
